@@ -25,6 +25,19 @@ at https://github.com/Untrivial-ai/agent-orchestrator/releases.
   stated reason instead of quietly acting on the wrong machine's files.
 - Importing and cloning against a remote server ask for a folder path rather than opening
   a file dialog that could only show this computer's disk.
+- A connection screen that takes a server address and password and checks them before
+  committing, so a mistyped address does not cost an operator the connection they already
+  had. It says which of the four things went wrong — nothing listening, password refused,
+  too many attempts, or something answering that is not a daemon — and leaves the address
+  in the field to correct.
+- The sidebar now names the server the client is talking to and says when the link has
+  dropped, so a stalled window is distinguishable from a quiet one. Nothing is shown for a
+  daemon on this computer, which has its own failure banner already.
+- Servers the operator has connected to are remembered between launches, addresses in
+  plain text and passwords in the OS keychain, and removing a server takes its password
+  with it. A browser client keeps neither, which its session cookie already covers.
+- A client and server on different versions say so, with both versions, next to the server
+  name. It is a note rather than a refusal to connect.
 - Planning artifacts for remote renderer support under
   `openspec/changes/add-remote-renderer/` — proposal, `remote-access` and `remote-client`
   specs, design, and task list.

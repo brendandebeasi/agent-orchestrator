@@ -305,6 +305,26 @@ describe("createEventTransport", () => {
 		expect(attempts[1].url).toBe("http://127.0.0.1:4555/api/v1/events");
 	});
 
+	it("does not carry one server's dropped stream over to the next", async () => {
+		// Restarting aborts the in-flight attempt, and the stream stays quiet about
+		// an abort it caused itself, so a standing "disconnected" would survive the
+		// move and have the UI report an outage on a machine it has not yet tried.
+		await connect();
+		const onBaseUrlChange = subscribeApiBaseUrlMock.mock.calls[0][0] as () => void;
+		bodies[0].end();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(getEventsConnectionState()).toBe("disconnected");
+
+		getApiBaseUrlMock.mockReturnValue("http://box:3010");
+		onBaseUrlChange();
+
+		expect(getEventsConnectionState()).toBe("idle");
+
+		await vi.advanceTimersByTimeAsync(1);
+		expect(getEventsConnectionState()).toBe("connected");
+		expect(attempts[attempts.length - 1].url).toBe("http://box:3010/api/v1/events");
+	});
+
 	it("resets the connection state and unsubscribes on disconnect", async () => {
 		const disconnect = await connect();
 		expect(getEventsConnectionState()).toBe("connected");

@@ -82,6 +82,7 @@ import { useKeybindingsStore } from "../stores/keybindings-store";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { CreateProjectFlow, type CloneProjectInput, type CreateProjectInput } from "./CreateProjectFlow";
 import { ResizeHandle } from "./ResizeHandle";
+import { ServerConnectionRail, ServerConnectionRow } from "./ServerConnectionRow";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { useCloudSession } from "../lib/cloud-session";
 
@@ -467,6 +468,7 @@ export function Sidebar({
 					className="sidebar-expanded-chrome relative flex w-full min-w-46.5 flex-col gap-0.5 transition-[opacity,transform] duration-150 ease-out group-data-[collapsible=icon]:pointer-events-none group-data-[collapsible=icon]:-translate-x-2 group-data-[collapsible=icon]:opacity-0"
 				>
 					<UpdateStatusRow status={updateStatus} tabIndex={isCollapsed ? -1 : 0} />
+					<ServerConnectionRow tabIndex={isCollapsed ? -1 : 0} />
 					<CloudAccountRow tabIndex={isCollapsed ? -1 : 0} />
 					<button
 						aria-label={t("settings.connectMobile")}
@@ -500,6 +502,7 @@ export function Sidebar({
 					className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex min-h-row-md flex-col items-center justify-end gap-1 opacity-0 transition-opacity duration-150 ease-out group-data-[collapsible=icon]:pointer-events-auto group-data-[collapsible=icon]:opacity-100"
 				>
 					<UpdateStatusRail status={updateStatus} tabIndex={isCollapsed ? 0 : -1} />
+					<ServerConnectionRail tabIndex={isCollapsed ? 0 : -1} />
 					<CloudAccountRailButton tabIndex={isCollapsed ? 0 : -1} />
 					<Tooltip>
 						<TooltipTrigger asChild>

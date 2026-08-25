@@ -74,6 +74,12 @@ let target: ServerTarget = {
  */
 let credential: string | null = null;
 
+/**
+ * Whether the credential we last held was refused by the server, as opposed to
+ * never having been supplied. Only meaningful while `credential` is null.
+ */
+let credentialRejected = false;
+
 const listeners = new Set<() => void>();
 
 function notify(): void {
@@ -144,6 +150,28 @@ export function serverIsLocal(): boolean {
 }
 
 /**
+ * What the client wants from the operator before it can talk to its server.
+ *
+ * `null` covers both a server that needs no password and one whose password we
+ * hold. The other two are the same missing credential with different histories,
+ * and they are kept apart because the prompt says different things: a password
+ * that was tried and refused is a correction, and one that was never supplied
+ * is a first request. Telling an operator their password was rejected when they
+ * have not typed one yet sends them looking for a mistake they did not make.
+ */
+export type CredentialPrompt = null | "rejected" | "missing";
+
+/**
+ * Whether the server wants a password this client does not have, and why. It is
+ * deliberately not "is the credential null": a local daemon holds no credential
+ * and needs none.
+ */
+export function serverCredentialPrompt(): CredentialPrompt {
+	if (!target.requiresAuth || credential !== null) return null;
+	return credentialRejected ? "rejected" : "missing";
+}
+
+/**
  * Forget the credential without changing the target, which is what a 401 means:
  * the address is right and the password is not. The target stays so the
  * operator is asked for a password rather than for an address they already
@@ -152,6 +180,7 @@ export function serverIsLocal(): boolean {
 export function clearServerCredential(): void {
 	if (credential === null) return;
 	credential = null;
+	credentialRejected = true;
 	notify();
 }
 
@@ -165,5 +194,10 @@ function setServerTarget(next: ServerTarget, nextCredential: string | null): voi
 	if (unchanged) return;
 	target = next;
 	credential = nextCredential;
+	// Any move ends the rejection. Either a fresh credential arrived, whose fate
+	// is its own story, or the client is pointed somewhere else, where the last
+	// server's verdict does not apply. Carrying it forward would tell the
+	// operator their new password was refused before it was ever sent.
+	credentialRejected = false;
 	notify();
 }

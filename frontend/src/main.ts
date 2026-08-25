@@ -32,6 +32,13 @@ import { initMainSentry } from "./main/sentry-main";
 import { readUpdateSettings, type UpdateSettings, type UpdateStatus } from "./main/update-settings";
 import { readKeybindingOverrides, writeKeybindingOverrides } from "./main/keybinding-settings";
 import { readEditorSettings, writeEditorPreference } from "./main/editor-settings";
+import {
+	listRemoteServers,
+	readRemoteCredential,
+	removeRemoteServer,
+	saveRemoteServer,
+} from "./main/remote-servers";
+import { isSavedServer, type SavedServer } from "./shared/remote-server";
 import { createEditorHandoff } from "./main/editor-handoff";
 import { launchCommand } from "./main/launch-command";
 import {
@@ -1656,13 +1663,46 @@ ipcMain.handle("daemon:restart", async () => {
 		return reportDaemonRestartFailure(error);
 	}
 });
+// The shell window is not the only webContents with a preload attached: an
+// embedded browser view renders whatever page an agent navigated to. Channels
+// that act on this machine or hand back a secret are pinned to the shell so
+// that page can never reach them.
+function assertShellSender(event: Electron.IpcMainInvokeEvent, subject: string): void {
+	if (event.sender !== getShellWebContents()) throw new Error(`Untrusted ${subject} request.`);
+}
 ipcMain.handle("editorHandoff:getState", (event, sessionId: string) => {
-	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	assertShellSender(event, "editor handoff");
 	return editorHandoff.getState(typeof sessionId === "string" ? sessionId : "");
 });
 ipcMain.handle("editorHandoff:open", (event, input) => {
-	if (event.sender !== getShellWebContents()) throw new Error("Untrusted editor handoff request.");
+	assertShellSender(event, "editor handoff");
 	return editorHandoff.open(input && typeof input === "object" ? input : { sessionId: "" });
+});
+// The saved-server list carries connection passwords, so every entry point is
+// pinned to the shell window the same way the editor handoff above is: a
+// webContents that is not the shell (a browser view showing a page an agent
+// navigated to) must not be able to read one back.
+ipcMain.handle("remoteServers:list", (event) => {
+	assertShellSender(event, "remote server");
+	return listRemoteServers(editorStateDir());
+});
+ipcMain.handle("remoteServers:save", (event, input: { server: SavedServer; credential: string | null }) => {
+	assertShellSender(event, "remote server");
+	if (!input || typeof input !== "object" || !isSavedServer(input.server)) {
+		throw new Error("Invalid remote server.");
+	}
+	return saveRemoteServer(editorStateDir(), {
+		server: input.server,
+		credential: typeof input.credential === "string" ? input.credential : null,
+	});
+});
+ipcMain.handle("remoteServers:remove", (event, baseUrl: string) => {
+	assertShellSender(event, "remote server");
+	return removeRemoteServer(editorStateDir(), typeof baseUrl === "string" ? baseUrl : "");
+});
+ipcMain.handle("remoteServers:readCredential", (event, baseUrl: string) => {
+	assertShellSender(event, "remote server");
+	return readRemoteCredential(editorStateDir(), typeof baseUrl === "string" ? baseUrl : "");
 });
 ipcMain.handle("app:getVersion", () => app.getVersion());
 ipcMain.handle("app:openExternal", async (_event, url: string) => {

@@ -204,6 +204,27 @@ stores the credential via `safeStorage`; the browser does not persist it at all 
 `ao_web` cookie already survives reload, and putting the password in `localStorage` would
 undo `HttpOnly`.
 
+Two things the implementation settled that are worth writing down. First, the Electron
+side keeps addresses and passwords in separate files — `remote-servers.json` in plaintext,
+`remote-credentials.bin` through `safeStorage` — and the entry's identity is its
+normalized base URL rather than a minted id. Sharing a key means the two stores cannot
+disagree about which server an entry is, which is the failure that would leave a password
+behind after the operator removed the server it belonged to. On a platform where
+`safeStorage` has no real backing (Linux without a keyring, where it reports `basic_text`),
+credentials are held in memory for the session and never written, matching what
+`cloud-auth.ts` already does.
+
+Second, `remoteServers` is deliberately not one of the capabilities from D9. A browser has
+a true answer to give — it remembers nothing — and returning an empty list is more useful
+to every caller than an exception each would have to catch. Capabilities are for asks a
+host genuinely cannot serve; this is an ask it serves with "nothing".
+
+The renderer also distinguishes a credential that was refused from one that was never
+supplied. Both send the operator to the connection screen, but "that password was not
+accepted" and "this server needs a password" are different sentences, and telling an
+operator their password was wrong when they never gave one is the kind of small lie that
+costs real debugging time.
+
 ### D8. `VITE_NO_ELECTRON` stops implying fixtures
 
 The four hooks that branch on `VITE_NO_ELECTRON` switch to a single `isPreviewMode()`
@@ -283,6 +304,17 @@ path can use it. A mismatch outside the supported range is surfaced to the opera
 both versions; the client does not attempt to replace a remote binary, and does not hard
 block, because a local-daemon install already guarantees a matched pair and a remote one
 is the operator's to manage.
+
+The renderer reads the version from `/healthz` rather than from the session route, and the
+same call is what it uses to probe a server before committing to it. The session route only
+exists in a daemon built with the web client, so a desktop client pointed at a plain daemon
+would find nothing there; `/healthz` is always mounted and, with the password attached,
+already answers the two questions that matter — is anything listening, and does it accept
+this credential. Comparison is exact string equality rather than a semver range, because
+client and server ship as a pair and any difference is worth naming; when either side has
+no version to report — a daemon started from the CLI has no supervising app to take one
+from — the result is "unknown" and nothing is shown, since a missing version is not
+evidence of a mismatch.
 
 ## Risks / Trade-offs
 

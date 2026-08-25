@@ -7,8 +7,10 @@ import { I18nextProvider } from "react-i18next";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import { queryClient } from "./lib/query-client";
+import { aoBridge, hasElectronHost } from "./lib/bridge";
 import { aimAtHostOrigin } from "./lib/daemon-status";
 import { isPreviewMode } from "./lib/preview-mode";
+import { setClientVersion } from "./lib/server-connection";
 import { mergeUnreadNotification, unreadNotificationsQueryKey } from "./lib/notifications";
 import { createAppRouter } from "./router";
 import { TelemetryBoundary } from "./components/TelemetryBoundary";
@@ -23,6 +25,22 @@ import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
 // preview build is aimed at nothing on purpose: it answers from fixtures and a
 // request that escaped to a server would be a bug worth seeing fail.
 if (!isPreviewMode()) aimAtHostOrigin();
+
+// Only a desktop host knows what release this client is. The browser build has
+// no version of its own yet — its stub reports a placeholder — and comparing a
+// placeholder against a real daemon would warn about a mismatch on every load
+// of a web client that its own daemon served. Leaving it null makes the
+// comparison report "unknown", which is the honest answer until the web build
+// carries a stamped version.
+if (hasElectronHost) {
+	void aoBridge.app
+		.getVersion()
+		.then((version: string) => setClientVersion(version))
+		.catch(() => {
+			// A host that cannot say its own version is not a reason to fail the
+			// launch; the comparison stays "unknown", same as the browser.
+		});
+}
 
 const router = createAppRouter(queryClient);
 

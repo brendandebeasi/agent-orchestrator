@@ -228,6 +228,14 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					list: async () => [],
 					getActive: async () => null,
 				},
+				// The e2e harness aims at a fixed daemon, so there is nothing to
+				// remember and nothing that would read it back.
+				remoteServers: {
+					list: async () => [],
+					save: async () => [],
+					remove: async () => [],
+					readCredential: async () => null,
+				},
 				cloud: {
 					getSession: async () => null,
 					signIn: async () => undefined,
@@ -675,6 +683,14 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				featureBuilds: {
 					list: async () => [],
 					getActive: async () => null,
+				},
+				// The e2e harness aims at a fixed daemon, so there is nothing to
+				// remember and nothing that would read it back.
+				remoteServers: {
+					list: async () => [],
+					save: async () => [],
+					remove: async () => [],
+					readCredential: async () => null,
 				},
 				cloud: {
 					getSession: async () => null,

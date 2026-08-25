@@ -26,6 +26,7 @@ import type { TelemetryBootstrap } from "./shared/telemetry";
 import type { MigrationState } from "./main/app-state";
 import type { UpdateSettings, UpdateStatus } from "./main/update-settings";
 import type { CloudAccount } from "./shared/cloud-account";
+import type { SavedServer } from "./shared/remote-server";
 import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import type { UpdateCheckOptions } from "./main/auto-updater";
@@ -420,6 +421,17 @@ const api = {
 	featureBuilds: {
 		list: () => ipcRenderer.invoke("featureBuilds:list") as Promise<FeatureBuild[]>,
 		getActive: () => ipcRenderer.invoke("featureBuilds:getActive") as Promise<{ pr: number } | null>,
+	},
+	// Where the operator's list of remote servers lives. The renderer never
+	// touches disk or the OS keychain itself: it asks the host, and a host that
+	// has neither (a browser) answers that it remembers nothing.
+	remoteServers: {
+		list: () => ipcRenderer.invoke("remoteServers:list") as Promise<SavedServer[]>,
+		save: (input: { server: SavedServer; credential: string | null }) =>
+			ipcRenderer.invoke("remoteServers:save", input) as Promise<SavedServer[]>,
+		remove: (baseUrl: string) => ipcRenderer.invoke("remoteServers:remove", baseUrl) as Promise<SavedServer[]>,
+		readCredential: (baseUrl: string) =>
+			ipcRenderer.invoke("remoteServers:readCredential", baseUrl) as Promise<string | null>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,

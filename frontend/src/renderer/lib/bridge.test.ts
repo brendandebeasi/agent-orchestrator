@@ -137,6 +137,25 @@ describe("the bridge stub in a browser tab", () => {
 		}
 	});
 
+	it("says plainly that it remembers no servers instead of failing the ask", async () => {
+		// A browser tab has nowhere safe to keep a password, and it does not need
+		// one: the session cookie the daemon set is what survives a reload. So the
+		// remoteServers surface is not capability-gated like the rest — it has a
+		// true answer to give, and callers get an empty list rather than an error
+		// they would each have to handle.
+		const bridge = await loadBrowserBridge();
+
+		await expect(bridge.remoteServers.list()).resolves.toEqual([]);
+		await expect(
+			bridge.remoteServers.save({
+				server: { baseUrl: "http://box:3010", label: "box:3010", lastConnectedAt: "2026-08-01T00:00:00.000Z" },
+				credential: "hunter2",
+			}),
+		).resolves.toEqual([]);
+		await expect(bridge.remoteServers.readCredential("http://box:3010")).resolves.toBeNull();
+		await expect(bridge.remoteServers.remove("http://box:3010")).resolves.toEqual([]);
+	});
+
 	it("still answers the questions a browser can answer for itself", async () => {
 		const bridge = await loadBrowserBridge();
 

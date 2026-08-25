@@ -288,6 +288,12 @@ if (typeof window !== "undefined") {
 			list: async () => [],
 			getActive: async () => null,
 		},
+		remoteServers: {
+			list: async () => [],
+			save: async () => [],
+			remove: async () => [],
+			readCredential: async () => null,
+		},
 		cloud: {
 			getSession: async () => null,
 			signIn: async () => undefined,

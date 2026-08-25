@@ -5,6 +5,7 @@ import { FolderPlus } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { CommandPalette } from "../components/CommandPalette";
 import { CenterPanelShell } from "../components/CenterPanelShell";
+import { ConnectServerScreen } from "../components/ConnectServerScreen";
 import { DaemonFailureBanner } from "../components/DaemonFailureBanner";
 import { NotificationRuntime } from "../components/NotificationCenter";
 import { TrayRuntime } from "../components/TrayRuntime";
@@ -22,6 +23,7 @@ import { WindowTitlebar } from "../components/WindowTitlebar";
 import { TerminalCacheProvider } from "../components/TerminalPane";
 import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useDaemonStatus } from "../hooks/useDaemonStatus";
+import { useServerConnection } from "../hooks/useServerConnection";
 import { useOpenShellTerminal } from "../hooks/useShellTerminals";
 import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { useWorkspaceQuery, workspaceQueryKey, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
@@ -105,6 +107,7 @@ function ShellLayout() {
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
 	const daemonStatus = useDaemonStatus(queryClient);
+	const serverConnection = useServerConnection();
 	const [workspaceStartupState, setWorkspaceStartupState] = useState<"loading" | "ready" | "error">("loading");
 	const workspaceStartupBaselineRef = useRef(0);
 	const { themePreference, resolvedTheme, themeStyle, toggleSidebar } = useUiStore();
@@ -734,6 +737,21 @@ function ShellLayout() {
 			}),
 		[],
 	);
+
+	// A remote server that wants a password we do not have takes the whole
+	// window. The shell below it would be a board with no data, a sidebar of
+	// nothing, and a failure banner naming a network error, when the actual
+	// state is simply that nobody has typed a password yet. This is the mount
+	// task 4.5 deferred: discarding the credential on a 401 keeps the address,
+	// so what comes back is this prompt and not a request to retype it.
+	if (serverConnection.credentialPrompt !== null) {
+		return (
+			<ConnectServerScreen
+				initialAddress={serverConnection.baseUrl ?? ""}
+				initialProblem={serverConnection.credentialPrompt === "rejected" ? { outcome: "rejected" } : null}
+			/>
+		);
+	}
 
 	return (
 		<ShellProvider

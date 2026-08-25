@@ -156,6 +156,14 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 
 			const rebind = () => {
 				boundBaseUrl = currentBaseUrl();
+				// Whatever the old server's stream was doing says nothing about the new
+				// one. Restarting aborts the current attempt, and an abort is our own
+				// doing, so the stream will not report a disconnect on its way out —
+				// which would otherwise leave a stale "disconnected" standing and have
+				// the UI complain that it is reconnecting to a server it has not yet
+				// tried. Reset to idle and let the next open or failure speak for the
+				// server we actually moved to.
+				setEventsConnectionState("idle");
 				stream.restart();
 			};
 

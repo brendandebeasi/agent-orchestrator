@@ -189,6 +189,18 @@ export const aoBridge: AoBridge =
 			list: async () => [],
 			getActive: async () => null,
 		},
+		// A browser deliberately remembers nothing here. The server it talks to
+		// is the one that served it, so there is no address to save, and its
+		// credential already survives a reload as an HttpOnly cookie the page
+		// cannot read. Copying that password into localStorage so this list
+		// could be non-empty would hand it to any script on the origin and undo
+		// the one property that made the cookie safe.
+		remoteServers: {
+			list: async () => [],
+			save: async () => [],
+			remove: async () => [],
+			readCredential: async () => null,
+		},
 		cloud: {
 			getSession: async () => null,
 			signIn: async () => undefined,
