@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -209,6 +210,121 @@ func TestNoCookieSetOnNonPreviewRoutes(t *testing.T) {
 		if ck.Name == authCookieName {
 			t.Fatal("auth cookie must not be set on a non-preview route")
 		}
+	}
+}
+
+// wsReq builds a WebSocket handshake for /mux offering the given subprotocols.
+func wsReq(subprotocols ...string) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, "/mux", nil)
+	r.RemoteAddr = "192.168.1.50:5555"
+	r.Header.Set("Upgrade", "websocket")
+	r.Header.Set("Connection", "keep-alive, Upgrade")
+	for _, p := range subprotocols {
+		r.Header.Add("Sec-WebSocket-Protocol", p)
+	}
+	return r
+}
+
+func encodeMuxAuth(password string) string {
+	return muxAuthSubprotocolPrefix + base64.RawURLEncoding.EncodeToString([]byte(password))
+}
+
+// The subprotocol credential is the browser's only way in, since a browser can
+// set no headers on a WebSocket handshake.
+func TestSubprotocolCredentialAuthenticatesUpgrade(t *testing.T) {
+	h, _ := newAuthUnderTest("secret12", time.Now)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, wsReq(encodeMuxAuth("secret12")))
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d want 200", w.Code)
+	}
+}
+
+// A subprotocol offered alongside others must still be found: browsers send the
+// full offer list in one header, comma-separated.
+func TestSubprotocolCredentialFoundAmongOthers(t *testing.T) {
+	h, _ := newAuthUnderTest("secret12", time.Now)
+	w := httptest.NewRecorder()
+	r := wsReq()
+	r.Header.Set("Sec-WebSocket-Protocol", "ao.mux.v1, "+encodeMuxAuth("secret12"))
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d want 200", w.Code)
+	}
+}
+
+// The subprotocol is read only on a real handshake. A plain request that merely
+// carries the header must not authenticate — otherwise the whole API would
+// accept a credential in a header no CORS preflight ever screens.
+func TestSubprotocolCredentialIgnoredOnPlainRequest(t *testing.T) {
+	h, _ := newAuthUnderTest("secret12", time.Now)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/v1/sessions", nil)
+	r.RemoteAddr = "192.168.1.50:5555"
+	r.Header.Set("Sec-WebSocket-Protocol", encodeMuxAuth("secret12"))
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d want 401 — the subprotocol credential must only count on a WebSocket upgrade", w.Code)
+	}
+}
+
+func TestSubprotocolCredentialRejectsBadValues(t *testing.T) {
+	cases := []struct {
+		name string
+		req  *http.Request
+	}{
+		{"wrong password", wsReq(encodeMuxAuth("wrongpass"))},
+		{"not base64url", wsReq(muxAuthSubprotocolPrefix + "not!base64")},
+		{"empty payload", wsReq(muxAuthSubprotocolPrefix)},
+		{"unrelated subprotocol", wsReq("ao.mux.v1")},
+		{"raw password, unencoded", wsReq(muxAuthSubprotocolPrefix + "secret12!")},
+		{"no subprotocol at all", wsReq()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newAuthUnderTest("secret12", time.Now)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, tc.req)
+			if w.Code != http.StatusUnauthorized {
+				t.Fatalf("got %d want 401", w.Code)
+			}
+		})
+	}
+}
+
+// The token is never read from the URL: a query string is not a credential.
+func TestCredentialNeverReadFromQueryString(t *testing.T) {
+	h, _ := newAuthUnderTest("secret12", time.Now)
+	for _, target := range []string{
+		"/mux?token=secret12",
+		"/mux?password=secret12",
+		"/api/v1/sessions?token=secret12",
+	} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest(http.MethodGet, target, nil)
+		r.RemoteAddr = "192.168.1.50:5555"
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s: got %d want 401", target, w.Code)
+		}
+	}
+}
+
+// A failed upgrade counts toward the same per-source lockout as a failed HTTP
+// request, so the handshake is not a rate-limit-free guessing oracle.
+func TestSubprotocolFailuresShareTheLockout(t *testing.T) {
+	h, _ := newAuthUnderTest("secret12", time.Now)
+	for i := 0; i < 5; i++ {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, wsReq(encodeMuxAuth("guess")))
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("attempt %d: got %d want 401", i, w.Code)
+		}
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req("Bearer secret12")) // same source, correct password, plain HTTP
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("got %d want 429 — upgrade failures must feed the shared lockout", w.Code)
 	}
 }
 

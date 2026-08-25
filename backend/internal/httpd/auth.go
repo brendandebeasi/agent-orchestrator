@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"encoding/base64"
 	"net"
 	"net/http"
 	"strings"
@@ -110,14 +111,70 @@ func previewFilesCookiePath(urlPath string) string {
 	return urlPath[:i+len(previewFilesMarker)]
 }
 
+// muxAuthSubprotocolPrefix marks a WebSocket subprotocol that carries the
+// connection token: "ao.auth.<base64url-nopad(password)>". A browser cannot put
+// a header on a WebSocket handshake, and the token must not go in the URL (URLs
+// land in access logs, proxy logs, and history), so the subprotocol — the one
+// client-controlled field in the handshake — carries it instead.
+//
+// The base64url wrapping is not obfuscation. RFC 6455 restricts subprotocol
+// names to HTTP token characters, and the connection password is not guaranteed
+// to stay within them; encoding makes the transport independent of the
+// password's charset.
+const muxAuthSubprotocolPrefix = "ao.auth."
+
+// isWebSocketUpgrade reports whether r is a WebSocket handshake, so the
+// subprotocol credential is only ever read on a request that could actually
+// negotiate one.
+func isWebSocketUpgrade(r *http.Request) bool {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+		return false
+	}
+	for _, token := range strings.Split(r.Header.Get("Connection"), ",") {
+		if strings.EqualFold(strings.TrimSpace(token), "upgrade") {
+			return true
+		}
+	}
+	return false
+}
+
+// websocketAuthSubprotocol returns the offered subprotocol that carries a
+// connection token and the decoded token itself, or two empty strings when the
+// request offers none. The protocol string is returned verbatim because a
+// successful upgrade must echo back exactly what the client offered.
+func websocketAuthSubprotocol(r *http.Request) (protocol, token string) {
+	if !isWebSocketUpgrade(r) {
+		return "", ""
+	}
+	for _, header := range r.Header.Values("Sec-WebSocket-Protocol") {
+		for _, offered := range strings.Split(header, ",") {
+			offered = strings.TrimSpace(offered)
+			if !strings.HasPrefix(offered, muxAuthSubprotocolPrefix) {
+				continue
+			}
+			decoded, err := base64.RawURLEncoding.DecodeString(strings.TrimPrefix(offered, muxAuthSubprotocolPrefix))
+			if err != nil || len(decoded) == 0 {
+				continue
+			}
+			return offered, string(decoded)
+		}
+	}
+	return "", ""
+}
+
 // connectionToken returns the caller's connection token. It comes from the
 // Authorization: Bearer header (the mobile API client and a preview page's
-// top-level navigation) or, ONLY on the preview-files route, the auth cookie (a
-// preview page's subresource requests — images/CSS/JS — which the WebView issues
-// without our header). Restricting the cookie to the preview-files path means it
-// can never authenticate any other mobile endpoint even if a client sends it.
+// top-level navigation); from a negotiated WebSocket subprotocol on a handshake
+// (a browser, which can set no headers there); or, ONLY on the preview-files
+// route, the auth cookie (a preview page's subresource requests — images/CSS/JS
+// — which the WebView issues without our header). Restricting the cookie to the
+// preview-files path means it can never authenticate any other mobile endpoint
+// even if a client sends it. The token is never read from the query string.
 func connectionToken(r *http.Request) string {
 	if t := bearerToken(r); t != "" {
+		return t
+	}
+	if _, t := websocketAuthSubprotocol(r); t != "" {
 		return t
 	}
 	if previewFilesCookiePath(r.URL.Path) != "" {

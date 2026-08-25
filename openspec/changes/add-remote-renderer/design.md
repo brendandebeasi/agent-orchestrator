@@ -112,9 +112,20 @@ Encoding makes the transport independent of the password's charset.
 
 `InsecureSkipVerify: true` on the upgrader is tolerable for a loopback-only socket. Once
 the same socket serves a browser page, it is not. On the network listener the upgrade
-requires either no `Origin` header (native clients) or an `Origin` equal to the listener's
-own origin. Loopback keeps today's behavior so nothing about the desktop-local path
-changes.
+requires no `Origin` header (native clients), an `Origin` equal to the listener's own
+origin (the web client the daemon served), or an `Origin` the operator explicitly
+allowlisted — which by default is only `app://renderer`, the scheme no web content can
+bear, and which is what a *remote* Electron client presents. Loopback keeps today's
+behavior so nothing about the desktop-local path changes.
+
+The check deliberately does not reuse `corsMiddleware`'s policy. That policy trusts any
+loopback origin, reasoning that loopback-served content can already reach the
+loopback-only daemon directly. On a network address that reasoning fails: a dev server on
+some other machine's localhost presents a loopback origin too. So the loopback heuristic
+stops at the loopback listener.
+
+This is defense in depth, not the boundary — `authMiddleware` has already refused the
+handshake unless it carried the password, which a cross-site page has no way to obtain.
 
 ### D5. Static assets authenticate by a path-scoped cookie; the API never does
 

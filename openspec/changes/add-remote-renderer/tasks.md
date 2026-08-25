@@ -1,16 +1,16 @@
 ## 1. Backend route policy
 
-- [ ] 1.1 Add an exact-shape allow-list to `isLANControlBlockedPath` in `backend/internal/httpd/lan_listener.go` that runs before the prefix block list, seeded with `GET /api/v1/desktop/sessions/{sessionId}/workspace`, keeping `/api/v1/desktop` in `lanControlBlockedPrefixes`; verify with new cases in `lan_listener_test.go` asserting the allowed route reaches the handler.
-- [ ] 1.2 Extend `lan_listener_test.go` with a table asserting every other route under `/api/v1/desktop` (including an invented future one) and every other blocked prefix still returns 404 on the network socket while reaching the handler on loopback; verify `go test ./internal/httpd/ -run LANControl` passes.
-- [ ] 1.3 Assert the allow-list is method-scoped: `POST`/`DELETE` to the allowed workspace path returns 404 on the network socket; verify by the new test case.
+- [x] 1.1 Add an exact-shape allow-list to `isLANControlBlockedPath` in `backend/internal/httpd/lan_listener.go` that runs before the prefix block list, seeded with `GET /api/v1/desktop/sessions/{sessionId}/workspace`, keeping `/api/v1/desktop` in `lanControlBlockedPrefixes`; verify with new cases in `lan_listener_test.go` asserting the allowed route reaches the handler.
+- [x] 1.2 Extend `lan_listener_test.go` with a table asserting every other route under `/api/v1/desktop` (including an invented future one) and every other blocked prefix still returns 404 on the network socket while reaching the handler on loopback; verify `go test ./internal/httpd/ -run LANControl` passes.
+- [x] 1.3 Assert the allow-list is method-scoped: `POST`/`DELETE` to the allowed workspace path returns 404 on the network socket; verify by the new test case.
 
 ## 2. Backend WebSocket auth
 
-- [ ] 2.1 Accept `Sec-WebSocket-Protocol: ao.auth.<base64url-nopad(password)>` on `/mux` in `backend/internal/httpd/terminal_mux.go`, validated through the same `authState` used by `authMiddleware`, echoing the negotiated subprotocol on success; verify with a `terminal_mux_test.go` case that dials with the subprotocol and reads a frame.
-- [ ] 2.2 Refuse the upgrade with 401 and no upgrade when the subprotocol credential is wrong, absent, or supplied only in the query string; verify with three `terminal_mux_test.go` cases asserting status and that no WebSocket handshake completes.
-- [ ] 2.3 Keep `Authorization: Bearer` working unchanged for native clients (the mobile app's path); verify the existing `terminal_mux_test.go` header cases still pass unmodified.
-- [ ] 2.4 Replace `InsecureSkipVerify: true` with an origin check that applies only to upgrades arriving on the network listener (no `Origin` header, or `Origin` equal to that listener's own origin), leaving loopback behavior identical; verify with cases covering loopback-with-foreign-origin (accepted, as today) and network-with-foreign-origin (refused).
-- [ ] 2.5 Feed the per-source lockout in `auth.go` from failed subprotocol upgrades as well as failed HTTP requests; verify with a test that six bad upgrades lock out a subsequent good one.
+- [x] 2.1 Accept `Sec-WebSocket-Protocol: ao.auth.<base64url-nopad(password)>` on `/mux` in `backend/internal/httpd/terminal_mux.go`, validated through the same `authState` used by `authMiddleware`, echoing the negotiated subprotocol on success; verify with a `terminal_mux_test.go` case that dials with the subprotocol and reads a frame.
+- [x] 2.2 Refuse the upgrade with 401 and no upgrade when the subprotocol credential is wrong, absent, or supplied only in the query string; verify with three `terminal_mux_test.go` cases asserting status and that no WebSocket handshake completes.
+- [x] 2.3 Keep `Authorization: Bearer` working unchanged for native clients (the mobile app's path); verify the existing `terminal_mux_test.go` header cases still pass unmodified.
+- [x] 2.4 Replace `InsecureSkipVerify: true` with an origin check that applies only to upgrades arriving on the network listener (no `Origin` header, or `Origin` equal to that listener's own origin), leaving loopback behavior identical; verify with cases covering loopback-with-foreign-origin (accepted, as today) and network-with-foreign-origin (refused).
+- [x] 2.5 Feed the per-source lockout in `auth.go` from failed subprotocol upgrades as well as failed HTTP requests; verify with a test that six bad upgrades lock out a subsequent good one.
 
 ## 3. Backend remote session and asset hosting
 

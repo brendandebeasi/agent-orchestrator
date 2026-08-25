@@ -35,7 +35,7 @@ type LANManager struct {
 func NewLANManager(handler http.Handler, state *authState, defaultPort int, log *slog.Logger, sink ports.EventSink) *LANManager {
 	lock := newLockout(5, time.Minute, time.Now)
 	return &LANManager{
-		handler:     lanControlBlock(authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))(handler)),
+		handler:     markNetworkListener(lanControlBlock(authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))(handler))),
 		defaultPort: defaultPort,
 		log:         loggerOrDefault(log),
 		state:       state,
@@ -63,13 +63,59 @@ var lanControlBlockedPrefixes = []string{
 	"/api/v1/system/install",
 }
 
+// networkListenerContextKey marks a request as having arrived on the
+// network-facing listener.
+type networkListenerContextKey struct{}
+
+// markNetworkListener records that a request was served by the network-facing
+// listener rather than by loopback. Like lanControlBlock, it keys off the
+// physical socket — the one thing a caller cannot spoof — so handlers
+// downstream can apply stricter rules without trusting Host, X-Forwarded-For,
+// or any other client-supplied header.
+func markNetworkListener(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ctx := context.WithValue(r.Context(), networkListenerContextKey{}, true)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// isNetworkListenerRequest reports whether r arrived on the network-facing
+// listener. False for every loopback request, including one whose headers claim
+// otherwise.
+func isNetworkListenerRequest(r *http.Request) bool {
+	marked, _ := r.Context().Value(networkListenerContextKey{}).(bool)
+	return marked
+}
+
+// lanControlAllowedRoutes are the individual routes that a full remote client
+// needs but that fall under a blocked prefix. Each entry names one method and
+// one exact route shape; "{}" matches exactly one path segment. The list is
+// consulted before lanControlBlockedPrefixes, so a prefix stays blocked by
+// default and every route carved out of it is named here deliberately. Removing
+// a prefix from the block list instead would silently expose every route added
+// under it later — the failure mode lanControlBlock exists to prevent.
+//
+// Keep this list minimal and read-only. A route that mutates the host, rather
+// than the workspace, does not belong here no matter which client wants it.
+var lanControlAllowedRoutes = []lanRoute{
+	// The renderer's workspace summary: the only /api/v1/desktop route a full
+	// client calls, and a read.
+	{method: http.MethodGet, pattern: "/api/v1/desktop/sessions/{}/workspace"},
+}
+
+// lanRoute is one method-and-shape pair in lanControlAllowedRoutes.
+type lanRoute struct {
+	method  string
+	pattern string
+}
+
 // lanControlBlock returns 404 for any request whose path is, or is nested
 // under, a loopback-only control-route prefix, before it ever reaches auth or
 // the shared router. It answers as if the route were never mounted at all —
 // no 403/401 that would confirm the path exists.
 func lanControlBlock(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if isLANControlBlockedPath(r.URL.Path) {
+		if isLANControlBlockedPath(r.Method, r.URL.Path) {
 			notFoundJSON(w, r)
 			return
 		}
@@ -77,11 +123,16 @@ func lanControlBlock(next http.Handler) http.Handler {
 	})
 }
 
-// isLANControlBlockedPath reports whether path matches a blocked prefix on an
-// exact segment boundary: "/api/v1/mobile" blocks itself and everything
-// beneath it ("/api/v1/mobile/status") but must not catch unrelated siblings
-// such as "/api/v1/mobileapp".
-func isLANControlBlockedPath(path string) bool {
+// isLANControlBlockedPath reports whether method and path are refused on the
+// LAN listener. An exact match in lanControlAllowedRoutes wins first; otherwise
+// path matches a blocked prefix on an exact segment boundary, so
+// "/api/v1/mobile" blocks itself and everything beneath it
+// ("/api/v1/mobile/status") but must not catch unrelated siblings such as
+// "/api/v1/mobileapp".
+func isLANControlBlockedPath(method, path string) bool {
+	if isLANControlAllowedRoute(method, path) {
+		return false
+	}
 	if strings.HasPrefix(path, "/api/v1/sessions/") && strings.HasSuffix(strings.TrimSuffix(path, "/"), "/preview/server") {
 		return true
 	}
@@ -97,9 +148,52 @@ func isLANControlBlockedPath(path string) bool {
 	return false
 }
 
+// isLANControlAllowedRoute reports whether method and path match one of the
+// carve-outs exactly. HEAD is treated as GET, matching how net/http serves a
+// GET handler for a HEAD request.
+func isLANControlAllowedRoute(method, path string) bool {
+	if method == http.MethodHead {
+		method = http.MethodGet
+	}
+	for _, route := range lanControlAllowedRoutes {
+		if route.method == method && matchLANRoutePattern(route.pattern, path) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchLANRoutePattern compares path against a pattern segment by segment,
+// where the "{}" placeholder matches exactly one non-empty segment. It does not
+// match a prefix: the segment counts must be equal, so "/a/{}/b" never admits
+// "/a/x/b/c". A trailing slash is a different path and does not match, so the
+// carve-out admits exactly one spelling of the route.
+func matchLANRoutePattern(pattern, path string) bool {
+	patternSegments := strings.Split(strings.Trim(pattern, "/"), "/")
+	pathSegments := strings.Split(strings.TrimPrefix(path, "/"), "/")
+	if len(patternSegments) != len(pathSegments) {
+		return false
+	}
+	for i, want := range patternSegments {
+		got := pathSegments[i]
+		if got == "" {
+			return false
+		}
+		if want == "{}" {
+			continue
+		}
+		if want != got {
+			return false
+		}
+	}
+	return true
+}
+
 // IsLANControlBlockedPathForTest exposes the LAN block check to package-external
 // tests so route-level invariants can be asserted without a live listener.
-func IsLANControlBlockedPathForTest(path string) bool { return isLANControlBlockedPath(path) }
+func IsLANControlBlockedPathForTest(method, path string) bool {
+	return isLANControlBlockedPath(method, path)
+}
 
 // NewMobileLAN constructs a LANManager with its own private authState. Callers
 // outside this package (the daemon) cannot construct an authState directly
