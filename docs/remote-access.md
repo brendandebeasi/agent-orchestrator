@@ -108,6 +108,73 @@ none. Quitting it leaves the sessions running -- they were never its processes.
 The daemon it attached to is still someone's local daemon, so the person sitting
 at that machine can use the app normally at the same time.
 
+## Running several clients at once
+
+One client attaches to one daemon. If you have agents running on four machines,
+you want four clients -- and a launch profile is what lets them coexist.
+
+```bash
+npm run launch:profile --prefix frontend -- vm2 https://vm2.tailnet.ts.net
+npm run launch:profile --prefix frontend -- vm3 https://vm3.tailnet.ts.net
+```
+
+Or, without the script:
+
+```bash
+open -n -a "Agent Orchestrator" --args --ao-profile=vm2 --ao-server=https://vm2.tailnet.ts.net
+```
+
+`open -n` is doing real work there. Without it, macOS activates the client you
+already have running instead of starting a second one. And the flags go after
+`--args` because that is the only channel that reaches the new instance:
+LaunchServices passes argv, not the environment, which is why these exist as
+flags at all. In dev, where the environment does survive, `AO_PROFILE` and
+`AO_REMOTE_SERVER` do the same job:
+
+```bash
+AO_PROFILE=vm2 AO_REMOTE_SERVER=https://vm2.tailnet.ts.net npm run dev
+```
+
+`--ao-server=` is optional after the first launch. A profile remembers the
+server it was last attached to, so `--ao-profile=vm2` on its own reconnects to
+vm2's daemon. When present it wins for that launch only, and an empty
+`--ao-server=` forces the profile back to a local daemon once, exactly as an
+empty `AO_REMOTE_SERVER` does.
+
+Profile names are lowercase letters, digits, dot, dash, and underscore, start
+with a letter or digit, and are at most 32 characters. The launcher refuses
+anything else. The app itself falls back to the default profile rather than
+refusing to start, so if you pass a bad name directly you get an unnamed window
+rather than an error -- check the window title if a launch lands somewhere
+unexpected.
+
+### What a profile separates, and what it does not
+
+| Per profile | Shared across profiles |
+| --- | --- |
+| The Electron profile under `~/.ao/profiles/<name>` | The saved-server list (`~/.ao/remote-servers.json`) |
+| The single-instance lock, which is what allows the second window | Saved connection passwords (`~/.ao/remote-credentials.bin`) |
+| The recorded server (`~/.ao/remote-mode.<name>.json`) | The local daemon, if any client is running one |
+
+The split is deliberate: what a client *is* differs per profile, what you
+*know* does not. Enter a server's address and password once and every profile
+can reach it.
+
+Two launches naming the same profile behave as two launches always have -- the
+second does not start. A launch naming no profile is unchanged in every respect,
+including which files it reads, so nothing about an existing install moves.
+
+The window title and tray tooltip name the profile, which is the only thing
+distinguishing four otherwise identical dock icons.
+
+### What this is not
+
+Four clients are four control planes, not one orchestrator dispatching across
+four machines. Each window drives one daemon, and an orchestrator agent running
+on one of those daemons spawns work on that daemon's machine -- `ao` resolves
+its daemon over loopback and has no way to name another. Coordinating across
+machines is still yours to do.
+
 ## Hosting the browser client
 
 The browser client takes two independent opt-ins: it has to be built into the

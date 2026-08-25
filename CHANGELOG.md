@@ -66,6 +66,26 @@ at https://github.com/Untrivial-ai/agent-orchestrator/releases.
 - Planning artifacts for remote renderer support under
   `openspec/changes/add-remote-renderer/` — proposal, `remote-access` and `remote-client`
   specs, design, and task list.
+- Launch profiles, so one install can drive several daemons at once. `--ao-profile=vm2`
+  (or `AO_PROFILE=vm2`) gives a launch its own Electron profile, and with it its own
+  single-instance lock, which is the thing that was stopping a second window from
+  starting at all. A profile remembers the server it was last attached to, so naming it
+  is enough to reconnect; `--ao-server=` joins `AO_REMOTE_SERVER` as a per-launch
+  override, and exists because macOS hands a packaged app argv and not the environment.
+  What the operator knows stays shared across profiles — the saved server list and the
+  keychain passwords are one address book, entered once.
+- A launch under a profile names it in the window title and the tray tooltip, which is
+  the only thing telling four otherwise identical dock icons apart.
+- `npm run launch:profile -- <name> [server]` in `frontend/`, which finds the installed
+  app and starts a second copy of it under a profile. It refuses a name the app would
+  have to reject, rather than launching something that silently lands on the default
+  profile.
+- Planning artifacts for launch profiles under `openspec/changes/add-launch-profiles/` —
+  proposal, `remote-client` spec deltas, design, and task list.
+
+A launch that names no profile is unchanged in every respect. It keeps the same
+`userData` directory, reads the same `remote-mode.json`, and shows the same window
+title, so nothing about an existing install moves and there is no migration.
 
 ### Changed
 

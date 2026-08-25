@@ -208,6 +208,33 @@ computer, or to a browser tab. [docs/remote-access.md](remote-access.md) is the
 guide: enabling the network listener, attaching a client, TLS with
 `tailscale serve`, and which features a remote client withdraws.
 
+One client attaches to one daemon, so reaching several machines at once means
+running several clients. A launch profile is what lets them coexist: it gives a
+launch its own Electron profile, and with it its own single-instance lock, so a
+second window actually starts instead of activating the first.
+
+```bash
+AO_PROFILE=vm2 AO_REMOTE_SERVER=https://vm2.tailnet.ts.net npm run dev
+```
+
+In dev that is all it takes, because a dev run inherits the shell environment.
+A packaged run does not -- macOS LaunchServices passes argv and not the
+environment -- so the same two settings exist as flags, and the
+`launch:profile` script wraps the `open -n -a ... --args` incantation that
+delivers them:
+
+```bash
+cd frontend
+npm run launch:profile -- vm2 https://vm2.tailnet.ts.net
+```
+
+Profile names are lowercase letters, digits, dot, dash, and underscore, up to
+32 characters. A launch that names no profile is unchanged in every respect,
+including which state files it reads, so an existing install is untouched by
+any of this. [docs/remote-access.md](remote-access.md#running-several-clients-at-once)
+has the rest: what a profile separates, what stays shared, and what four
+clients are not.
+
 The browser client is not in a stock build. To build one:
 
 ```bash
