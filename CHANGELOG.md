@@ -57,6 +57,12 @@ at https://github.com/Untrivial-ai/agent-orchestrator/releases.
   loading successfully and then failing every call it made. The token is kept per tab, so
   a second tab on the same daemon loads the app and then asks for the password again
   rather than inheriting a session nobody signed into it with.
+- `docs/remote-access.md` documents the whole path from the operator's side: turning the
+  network listener on, attaching a desktop client, building and hosting the browser
+  client, getting TLS through `tailscale serve`, and which four features a remote client
+  withdraws and why. Every command in it was run against a live daemon.
+- `docs/adr/0003-remote-renderer-over-the-network-listener.md` records the decisions
+  behind all of it, as a follow-on to ADR 0001.
 - Planning artifacts for remote renderer support under
   `openspec/changes/add-remote-renderer/` — proposal, `remote-access` and `remote-client`
   specs, design, and task list.

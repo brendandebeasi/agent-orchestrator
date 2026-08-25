@@ -201,6 +201,39 @@ assume `packages/mobile/README.md` is a complete setup guide on this branch.
 Until a tracked guide lands, use the desktop/backend workflow above and check
 open issues/PRs for current mobile-specific setup notes.
 
+## Remote access
+
+The daemon can also serve the full renderer to a desktop client on another
+computer, or to a browser tab. [docs/remote-access.md](remote-access.md) is the
+guide: enabling the network listener, attaching a client, TLS with
+`tailscale serve`, and which features a remote client withdraws.
+
+The browser client is not in a stock build. To build one:
+
+```bash
+cd frontend
+npm run build:web        # writes backend/internal/httpd/webclient/
+
+cd ../backend
+go build -tags webui -o /tmp/ao ./cmd/ao
+AO_REMOTE_SERVE_WEB=on /tmp/ao daemon
+```
+
+Both opt-ins are required: without `-tags webui` the binary embeds no bundle,
+and without `AO_REMOTE_SERVE_WEB` it serves none. The bundle directory is
+gitignored apart from its markers, so `npm run build:web` is a build step and
+not something to commit.
+
+Backend tests that read the real embedded bundle run under the tag:
+
+```bash
+cd backend
+go test -tags webui ./internal/httpd/
+```
+
+They skip when nobody has built a bundle, so the default `go test ./...` stays
+green without one.
+
 ## Running end-to-end
 
 1. Start the desktop app with `npm run dev` from `frontend/`.
