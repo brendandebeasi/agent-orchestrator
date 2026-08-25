@@ -57,10 +57,10 @@ function entry(overrides: Partial<TraySessionEntry> & { sessionId: string }): Tr
 	return { projectId: "proj-1", projectName: "note-tauri", title: overrides.sessionId, zone: "action", ...overrides };
 }
 
-function setup() {
+function setup(idleTooltip = "Agent Orchestrator") {
 	const openSession = vi.fn();
 	const focusWindow = vi.fn();
-	const controller = createTrayController({ focusWindow, openSession, locale: "en" });
+	const controller = createTrayController({ focusWindow, openSession, locale: "en", idleTooltip });
 	if (!controller) throw new Error("expected a tray controller");
 	const tray = trayInstances[trayInstances.length - 1];
 	return { controller, tray, openSession, focusWindow };
@@ -75,6 +75,24 @@ afterEach(() => {
 });
 
 describe("createTrayController", () => {
+	it("shows the unchanged tooltip when the launch names no profile", () => {
+		const { tray } = setup();
+		expect(tray.tooltip).toBe("Agent Orchestrator");
+	});
+
+	// One tray icon per machine, all rendered from the same template image. The
+	// tooltip is the only thing that tells them apart before clicking.
+	it("names the profile in the idle tooltip when there is one", () => {
+		const { tray } = setup("Agent Orchestrator · vm2");
+		expect(tray.tooltip).toBe("Agent Orchestrator · vm2");
+	});
+
+	it("still counts sessions needing attention over the idle tooltip", () => {
+		const { controller, tray } = setup("Agent Orchestrator · vm2");
+		controller.setState({ sessions: [entry({ sessionId: "s-1" }), entry({ sessionId: "s-2" })] });
+		expect(tray.tooltip).toBe("2 sessions need attention");
+	});
+
 	it("renders an empty state with no title before any session needs attention", () => {
 		const { tray } = setup();
 		expect(tray.title).toBe("");

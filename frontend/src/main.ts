@@ -112,6 +112,7 @@ import { dockBounceType, shouldReplaceBounce, shouldSignalAttention, shouldToast
 import { buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
 import { ancestorRepositorySetupWarning, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
+import { launchProfileUserDataPath, launchProfileWindowTitle, resolveLaunchProfile } from "./main/launch-profile";
 import { readRemoteModeSetting, REMOTE_SERVER_ENV, resolveRemoteServer, writeRemoteModeSetting, type RemoteMode } from "./main/remote-mode";
 import { REMOTE_SERVER_ARG_PREFIX, type RemoteModeChange } from "./shared/remote-server";
 import { posthogOrigins, rendererContentSecurityPolicy } from "./shared/content-security-policy";
@@ -166,10 +167,13 @@ if (disableGpu === "1" || disableGpu === "true" || disableGpu === "yes" || disab
 // keeps this directory open, and two Chromium instances sharing one profile
 // corrupt its LevelDB stores. Mirrors how dev already isolates running.json and
 // the daemon data dir into ~/.ao/dev.
-app.setPath(
-	"userData",
-	app.isPackaged ? path.join(os.homedir(), ".ao", "electron") : path.join(os.homedir(), ".ao", "dev", "electron"),
-);
+// A named launch profile is the third instance of that same rule, and the
+// mechanism behind running several clients at once: Electron's single-instance
+// lock below is keyed on this path, so giving a launch its own directory is
+// what lets it run alongside the others — each attached to a different daemon.
+// An unnamed launch resolves to the two literal paths this always used.
+const launchProfile = resolveLaunchProfile(process.argv, process.env);
+app.setPath("userData", launchProfileUserDataPath(launchProfile, { home: os.homedir(), packaged: app.isPackaged }));
 
 // Init main-process Sentry as early as possible so startup crashes are caught,
 // and after userData is pinned so its cache resolves under ~/.ao/electron. The
@@ -467,7 +471,9 @@ async function createWindowInternal(): Promise<void> {
 		height: 860,
 		minWidth: 960,
 		minHeight: 640,
-		title: "Agent Orchestrator",
+		// Names the profile when there is one, so an operator running a client per
+		// machine can tell four identical windows apart. Unchanged when there is not.
+		title: launchProfileWindowTitle(launchProfile),
 		icon: windowIconPath(),
 		backgroundColor: NATIVE_WINDOW_BACKGROUND_DARK,
 		// Windows goes frameless and the renderer paints the whole titlebar,
@@ -1782,7 +1788,11 @@ ipcMain.handle("remoteMode:get", (event) => {
 });
 ipcMain.handle("remoteMode:set", async (event, baseUrl: string | null) => {
 	assertShellSender(event, "remote mode");
-	const server = await writeRemoteModeSetting(editorStateDir(), typeof baseUrl === "string" ? baseUrl : null);
+	const server = await writeRemoteModeSetting(
+		editorStateDir(),
+		typeof baseUrl === "string" ? baseUrl : null,
+		launchProfile,
+	);
 	const overriddenByEnv = process.env[REMOTE_SERVER_ENV] !== undefined;
 	// Any change of server needs a new process, in both directions.
 	//
@@ -2367,8 +2377,9 @@ app.whenReady().then(async () => {
 	// answer out of its launch arguments, and `startDaemon` reads it to decide
 	// whether there is a daemon to start at all.
 	remoteMode = resolveRemoteServer(
+		process.argv,
 		process.env,
-		keybindingRunFile ? await readRemoteModeSetting(path.dirname(keybindingRunFile)) : null,
+		keybindingRunFile ? await readRemoteModeSetting(path.dirname(keybindingRunFile), launchProfile) : null,
 	);
 	if (remoteMode) {
 		console.info(`AO: attaching to ${remoteMode.baseUrl} (${remoteMode.source}); no local daemon will be started`);
@@ -2390,6 +2401,7 @@ app.whenReady().then(async () => {
 			focusWindow: focusMainWindow,
 			openSession: trayLifecycle.openSession,
 			locale: initialUiSettings.locale,
+			idleTooltip: launchProfileWindowTitle(launchProfile),
 		});
 	}
 	await createWindow();

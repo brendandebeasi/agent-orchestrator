@@ -24,6 +24,30 @@ import { normalizeServerAddress } from "../shared/remote-server";
 export const REMOTE_MODE_FILE_NAME = "remote-mode.json";
 
 /**
+ * Which file a profile records its server in.
+ *
+ * The server a client is attached to is the one thing that must differ between
+ * concurrent clients, and it must persist: an operator who set up a client per
+ * machine should not re-enter four addresses on every launch.
+ *
+ * The state directory itself is shared — it is derived from the run file, not
+ * from userData — so the split is per file and deliberate. remote-servers.json
+ * and remote-credentials.bin stay shared, because they are the operator's
+ * address book: splitting them would mean entering the same addresses and the
+ * same passwords once per profile, and would multiply the places a credential
+ * is stored. What a client *is* differs per profile; what the operator *knows*
+ * does not.
+ *
+ * The default profile keeps the exact existing filename, so an install that
+ * predates profiles still finds its setting. A per-profile name rather than a
+ * per-profile directory also keeps writeRemoteModeSetting's temp-file-and-
+ * rename within one directory, which is what makes the rename atomic.
+ */
+export function remoteModeFileName(profile: string | null): string {
+	return profile === null ? REMOTE_MODE_FILE_NAME : `remote-mode.${profile}.json`;
+}
+
+/**
  * A resolved decision to attach to a server rather than run one.
  *
  * `source` is carried because it changes what the operator can do about it: a
@@ -40,14 +64,34 @@ export type RemoteMode = {
 export const REMOTE_SERVER_ENV = "AO_REMOTE_SERVER";
 
 /**
- * Decide whether this launch is remote, from the environment and the setting.
+ * The argv flag that forces remote mode for one launch.
  *
- * The environment wins because that is what an override is for: a developer
- * running against a colleague's daemon, or an operator recovering a client that
- * has been left pointed at a machine that no longer exists. Setting the
- * variable to an empty string is how they force local mode for one launch
- * without editing the setting — it is present, so it wins, and it names no
- * server, so there is nothing to attach to.
+ * The same override as REMOTE_SERVER_ENV, in the one place a packaged macOS app
+ * can still be reached: a second copy starts through `open -n -a <app> --args`,
+ * and LaunchServices passes argv but not the calling shell's environment. An
+ * operator launching a client per machine names the server the same way they
+ * name the profile, or they could name neither.
+ */
+export const REMOTE_SERVER_ARG_PREFIX = "--ao-server=";
+
+/**
+ * Decide whether this launch is remote, from argv, the environment, and the
+ * setting, in that order of precedence.
+ *
+ * An override wins because that is what an override is for: a developer running
+ * against a colleague's daemon, or an operator recovering a client that has
+ * been left pointed at a machine that no longer exists. Setting either override
+ * to an empty string is how they force local mode for one launch without
+ * editing the setting — it is present, so it wins, and it names no server, so
+ * there is nothing to attach to.
+ *
+ * argv sits above the environment for the reason REMOTE_SERVER_ARG_PREFIX
+ * records: it is the only one of the two that survives `open -n -a`. Both
+ * report `source: "env"`, because what that field decides is whether the UI
+ * offers the operator a setting to change, and a launch flag is no more theirs
+ * to change from inside a running window than a variable is. Splitting it into
+ * a third source would mean a third branch everywhere it is read, to say the
+ * same thing.
  *
  * An address that cannot be parsed is treated as no address at all. There is no
  * useful failure mode here: refusing to start would strand a client over a typo
@@ -56,8 +100,13 @@ export const REMOTE_SERVER_ENV = "AO_REMOTE_SERVER";
  * at the setting. Falling back to the local daemon leaves a working app, and
  * the address the client is using is shown in the UI.
  */
-export function resolveRemoteServer(env: NodeJS.ProcessEnv, persisted: string | null): RemoteMode | null {
-	const override = env[REMOTE_SERVER_ENV];
+export function resolveRemoteServer(
+	argv: string[],
+	env: NodeJS.ProcessEnv,
+	persisted: string | null,
+): RemoteMode | null {
+	const flag = argv.find((entry) => entry.startsWith(REMOTE_SERVER_ARG_PREFIX));
+	const override = flag !== undefined ? flag.slice(REMOTE_SERVER_ARG_PREFIX.length) : env[REMOTE_SERVER_ENV];
 	if (override !== undefined) {
 		const baseUrl = normalizeServerAddress(override);
 		return baseUrl === null ? null : { baseUrl, source: "env" };
@@ -67,8 +116,20 @@ export function resolveRemoteServer(env: NodeJS.ProcessEnv, persisted: string | 
 	return baseUrl === null ? null : { baseUrl, source: "setting" };
 }
 
-function settingPath(stateDir: string): string {
-	return path.join(stateDir, REMOTE_MODE_FILE_NAME);
+/**
+ * Distinguishes one in-flight write from another within this process.
+ *
+ * The temp file has to live in the same directory as its target for the rename
+ * to be atomic, so every profile writes into one directory. The name used to
+ * carry the pid and a millisecond timestamp, which is unique enough for one
+ * window clicking Save and not for two profiles saving at once: two writes in
+ * the same millisecond from the same process built the same path, and the
+ * second rename found nothing there to rename. A counter cannot tie.
+ */
+let writeSequence = 0;
+
+function settingPath(stateDir: string, profile: string | null): string {
+	return path.join(stateDir, remoteModeFileName(profile));
 }
 
 /**
@@ -79,10 +140,10 @@ function settingPath(stateDir: string): string {
  * parses is one an operator hand-edited, and the local daemon is the safe place
  * to land.
  */
-export async function readRemoteModeSetting(stateDir: string): Promise<string | null> {
+export async function readRemoteModeSetting(stateDir: string, profile: string | null = null): Promise<string | null> {
 	let raw: string;
 	try {
-		raw = await readFile(settingPath(stateDir), "utf8");
+		raw = await readFile(settingPath(stateDir, profile), "utf8");
 	} catch {
 		return null;
 	}
@@ -103,8 +164,12 @@ export async function readRemoteModeSetting(stateDir: string): Promise<string | 
  * comes back to the old setting rather than to a truncated file — which would
  * read as local mode and quietly start a daemon the operator did not ask for.
  */
-export async function writeRemoteModeSetting(stateDir: string, baseUrl: string | null): Promise<string | null> {
-	const file = settingPath(stateDir);
+export async function writeRemoteModeSetting(
+	stateDir: string,
+	baseUrl: string | null,
+	profile: string | null = null,
+): Promise<string | null> {
+	const file = settingPath(stateDir, profile);
 	if (baseUrl === null) {
 		// Removing the file rather than writing `{"server": null}` keeps "no
 		// setting" a single state on disk, so a fresh install and a client that
@@ -113,9 +178,9 @@ export async function writeRemoteModeSetting(stateDir: string, baseUrl: string |
 		return null;
 	}
 	const normalized = normalizeServerAddress(baseUrl);
-	if (normalized === null) return await readRemoteModeSetting(stateDir);
+	if (normalized === null) return await readRemoteModeSetting(stateDir, profile);
 	await mkdir(stateDir, { recursive: true, mode: 0o750 });
-	const tmp = path.join(stateDir, `.remote-mode-${process.pid}-${Date.now()}.json`);
+	const tmp = path.join(stateDir, `.${remoteModeFileName(profile)}.${process.pid}-${(writeSequence += 1)}.tmp`);
 	await writeFile(tmp, `${JSON.stringify({ server: normalized }, null, 2)}\n`, { mode: 0o600 });
 	await rename(tmp, file);
 	return normalized;

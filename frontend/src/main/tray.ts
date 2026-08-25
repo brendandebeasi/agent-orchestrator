@@ -33,6 +33,15 @@ export type TrayControllerOptions = {
 	focusWindow: () => void;
 	openSession: (target: TrayOpenSessionTarget) => void;
 	locale: AppLocale;
+	/**
+	 * The idle tooltip, which names this launch's profile when it has one.
+	 *
+	 * An operator running a client per machine has one tray icon per machine,
+	 * rendered from the same template image. The tooltip is the only thing that
+	 * tells them apart before clicking. Passed in rather than computed here so
+	 * the tray cannot disagree with the window title about which profile this is.
+	 */
+	idleTooltip: string;
 };
 
 export function createTrayController(options: TrayControllerOptions): TrayController | null {
@@ -67,7 +76,10 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 	const render = () => {
 		const count = sessions.length;
 		tray.setTitle(count > 0 ? String(count) : "");
-		tray.setToolTip(count > 0 ? tPlural("tray.attentionTooltip", count) : "Agent Orchestrator");
+		// The attention count stays as it is: a number of sessions needing
+		// attention is what the operator is being told, and it is already scoped
+		// to this client by virtue of being this client's tray icon.
+		tray.setToolTip(count > 0 ? tPlural("tray.attentionTooltip", count) : options.idleTooltip);
 
 		const items: MenuItemConstructorOptions[] = [];
 		if (count === 0) {

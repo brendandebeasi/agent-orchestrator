@@ -5,7 +5,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
 	REMOTE_MODE_FILE_NAME,
+	REMOTE_SERVER_ARG_PREFIX,
 	readRemoteModeSetting,
+	remoteModeFileName,
 	resolveRemoteServer,
 	writeRemoteModeSetting,
 } from "./remote-mode";
@@ -22,18 +24,18 @@ afterEach(async () => {
 
 describe("deciding whether a launch is remote", () => {
 	it("runs a local daemon when nothing says otherwise", () => {
-		expect(resolveRemoteServer({}, null)).toBeNull();
+		expect(resolveRemoteServer([], {}, null)).toBeNull();
 	});
 
 	it("attaches to the server the operator saved", () => {
-		expect(resolveRemoteServer({}, "http://box:3010")).toEqual({
+		expect(resolveRemoteServer([], {}, "http://box:3010")).toEqual({
 			baseUrl: "http://box:3010",
 			source: "setting",
 		});
 	});
 
 	it("lets the environment override the setting", () => {
-		expect(resolveRemoteServer({ AO_REMOTE_SERVER: "http://other:3010" }, "http://box:3010")).toEqual({
+		expect(resolveRemoteServer([], { AO_REMOTE_SERVER: "http://other:3010" }, "http://box:3010")).toEqual({
 			baseUrl: "http://other:3010",
 			source: "env",
 		});
@@ -43,18 +45,62 @@ describe("deciding whether a launch is remote", () => {
 		// The variable is present, so it wins; it names no server, so there is
 		// nothing to attach to. That is the escape hatch for a client left
 		// pointed at a machine that no longer exists.
-		expect(resolveRemoteServer({ AO_REMOTE_SERVER: "" }, "http://box:3010")).toBeNull();
+		expect(resolveRemoteServer([], { AO_REMOTE_SERVER: "" }, "http://box:3010")).toBeNull();
 	});
 
 	it("accepts an address typed the way people type one", () => {
-		expect(resolveRemoteServer({ AO_REMOTE_SERVER: "box:3010" }, null)?.baseUrl).toBe("http://box:3010");
+		expect(resolveRemoteServer([], { AO_REMOTE_SERVER: "box:3010" }, null)?.baseUrl).toBe("http://box:3010");
 	});
 
 	it("falls back to the local daemon rather than starting with a mangled address", () => {
 		// Refusing to start would strand the client over a typo in a file the
 		// operator may not know exists.
-		expect(resolveRemoteServer({}, "::::")).toBeNull();
-		expect(resolveRemoteServer({ AO_REMOTE_SERVER: "::::" }, "http://box:3010")).toBeNull();
+		expect(resolveRemoteServer([], {}, "::::")).toBeNull();
+		expect(resolveRemoteServer([], { AO_REMOTE_SERVER: "::::" }, "http://box:3010")).toBeNull();
+	});
+
+	// argv is the only override that survives `open -n -a <app> --args ...`,
+	// which is how a second copy of a packaged macOS app starts.
+	it("takes the server named in argv", () => {
+		expect(resolveRemoteServer([`${REMOTE_SERVER_ARG_PREFIX}http://box:3010`], {}, null)).toEqual({
+			baseUrl: "http://box:3010",
+			source: "env",
+		});
+	});
+
+	it("lets argv override the environment", () => {
+		expect(
+			resolveRemoteServer(
+				[`${REMOTE_SERVER_ARG_PREFIX}http://flag:3010`],
+				{ AO_REMOTE_SERVER: "http://env:3010" },
+				"http://saved:3010",
+			)?.baseUrl,
+		).toBe("http://flag:3010");
+	});
+
+	it("lets argv override the saved setting", () => {
+		expect(resolveRemoteServer([`${REMOTE_SERVER_ARG_PREFIX}http://flag:3010`], {}, "http://saved:3010")).toEqual({
+			baseUrl: "http://flag:3010",
+			source: "env",
+		});
+	});
+
+	// The same escape hatch as an empty AO_REMOTE_SERVER, at the level above it:
+	// present, so it wins; names nothing, so there is nothing to attach to.
+	it("takes an empty flag as a way to force local mode for one launch", () => {
+		expect(
+			resolveRemoteServer([REMOTE_SERVER_ARG_PREFIX], { AO_REMOTE_SERVER: "http://env:3010" }, "http://saved:3010"),
+		).toBeNull();
+	});
+
+	it("ignores a flag that only looks like the server flag", () => {
+		expect(resolveRemoteServer(["--ao-server", "http://flag:3010"], {}, "http://saved:3010")?.baseUrl).toBe(
+			"http://saved:3010",
+		);
+	});
+
+	it("normalizes an address given in argv the way it does one from anywhere else", () => {
+		expect(resolveRemoteServer([`${REMOTE_SERVER_ARG_PREFIX}box:3010`], {}, null)?.baseUrl).toBe("http://box:3010");
 	});
 });
 
@@ -105,6 +151,76 @@ describe("the persisted setting", () => {
 		await writeFile(path.join(stateDir, REMOTE_MODE_FILE_NAME), JSON.stringify({ server: 3010 }));
 
 		await expect(readRemoteModeSetting(stateDir)).resolves.toBeNull();
+	});
+});
+
+/**
+ * One setting per profile, in one shared directory.
+ *
+ * The state directory is derived from the run file rather than from userData,
+ * so relocating a launch's Electron profile does not move it. That is what
+ * makes the split deliberate and per file: the server a client is attached to
+ * is the one thing concurrent clients must disagree about, and the address book
+ * beside it is the one thing they should not.
+ */
+describe("scoping the setting to a profile", () => {
+	it("keeps the exact existing filename for the default profile", () => {
+		// An install that predates profiles has to keep finding its setting, so
+		// this is asserted as a literal rather than composed from the constant.
+		expect(remoteModeFileName(null)).toBe("remote-mode.json");
+	});
+
+	it("gives a named profile its own file", () => {
+		expect(remoteModeFileName("vm2")).toBe("remote-mode.vm2.json");
+		expect(remoteModeFileName("vm2")).not.toBe(remoteModeFileName("vm3"));
+	});
+
+	it("reads and writes the default profile exactly where it always did", async () => {
+		await writeRemoteModeSetting(stateDir, "http://box:3010", null);
+
+		await expect(readFile(path.join(stateDir, REMOTE_MODE_FILE_NAME), "utf8")).resolves.toContain("http://box:3010");
+	});
+
+	it("keeps two profiles from seeing each other's server", async () => {
+		await writeRemoteModeSetting(stateDir, "http://box-a:3010", "vm2");
+		await writeRemoteModeSetting(stateDir, "http://box-b:3010", "vm3");
+
+		await expect(readRemoteModeSetting(stateDir, "vm2")).resolves.toBe("http://box-a:3010");
+		await expect(readRemoteModeSetting(stateDir, "vm3")).resolves.toBe("http://box-b:3010");
+	});
+
+	it("leaves the default profile untouched when a named one is written", async () => {
+		await writeRemoteModeSetting(stateDir, "http://box-default:3010", null);
+
+		await writeRemoteModeSetting(stateDir, "http://box-a:3010", "vm2");
+
+		await expect(readRemoteModeSetting(stateDir, null)).resolves.toBe("http://box-default:3010");
+	});
+
+	it("clears one profile without clearing another", async () => {
+		await writeRemoteModeSetting(stateDir, "http://box-a:3010", "vm2");
+		await writeRemoteModeSetting(stateDir, "http://box-b:3010", "vm3");
+
+		await writeRemoteModeSetting(stateDir, null, "vm2");
+
+		await expect(readRemoteModeSetting(stateDir, "vm2")).resolves.toBeNull();
+		await expect(readRemoteModeSetting(stateDir, "vm3")).resolves.toBe("http://box-b:3010");
+	});
+
+	// The temp-file-and-rename has to stay inside the state directory for the
+	// rename to be atomic, which means concurrent profiles share a directory to
+	// write into. The temp name carries the pid and a timestamp, so they do not
+	// collide -- this asserts it rather than assuming it.
+	it("survives two profiles writing at the same moment", async () => {
+		await Promise.all([
+			writeRemoteModeSetting(stateDir, "http://box-a:3010", "vm2"),
+			writeRemoteModeSetting(stateDir, "http://box-b:3010", "vm3"),
+			writeRemoteModeSetting(stateDir, "http://box-c:3010", null),
+		]);
+
+		await expect(readRemoteModeSetting(stateDir, "vm2")).resolves.toBe("http://box-a:3010");
+		await expect(readRemoteModeSetting(stateDir, "vm3")).resolves.toBe("http://box-b:3010");
+		await expect(readRemoteModeSetting(stateDir, null)).resolves.toBe("http://box-c:3010");
 	});
 });
 
