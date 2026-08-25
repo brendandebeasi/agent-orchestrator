@@ -9,6 +9,7 @@ import {
 	setApiBaseUrl,
 	subscribeApiBaseUrl,
 } from "./api-client";
+import { setRemoteServerTarget } from "./server-target";
 import { captureRendererEvent } from "./telemetry";
 
 vi.mock("./telemetry", () => ({
@@ -116,6 +117,62 @@ describe("apiClient runtime base URL", () => {
 		// Empty base → no rewrite; openapi-fetch's own request reaches fetch as-is.
 		expect(seen).toHaveLength(1);
 		expect(seen[0].url).toContain("/api/v1/projects");
+	});
+
+	it("sends no Authorization header to a server that authenticates nothing", async () => {
+		const seen: (string | null)[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+			const headers = input instanceof Request ? input.headers : new Headers(init?.headers);
+			seen.push(headers.get("authorization"));
+			return new Response(JSON.stringify({ projects: [] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
+
+		setApiBaseUrl("http://127.0.0.1:3037");
+		await apiClient.GET("/api/v1/projects");
+
+		expect(seen).toEqual([null]);
+	});
+
+	it("attaches the credential as a bearer token for a server that requires one", async () => {
+		const seen: { url: string; authorization: string | null }[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+			seen.push({
+				url: input instanceof Request ? input.url : input.toString(),
+				authorization: new Headers(init?.headers).get("authorization"),
+			});
+			return new Response(JSON.stringify({ projects: [] }), {
+				status: 200,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
+
+		setRemoteServerTarget({ baseUrl: "http://desk.local:3001", label: "Desk", credential: "hunter2" });
+		await apiClient.GET("/api/v1/projects");
+
+		expect(seen).toEqual([{ url: "http://desk.local:3001/api/v1/projects", authorization: "Bearer hunter2" }]);
+	});
+
+	it("keeps the credential off the wire once the server has rejected it", async () => {
+		const seen: (string | null)[] = [];
+		vi.spyOn(globalThis, "fetch").mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
+			seen.push(new Headers(init?.headers).get("authorization"));
+			return new Response(JSON.stringify({ message: "unauthorized" }), {
+				status: 401,
+				headers: { "Content-Type": "application/json" },
+			});
+		});
+
+		setRemoteServerTarget({ baseUrl: "http://desk.local:3001", label: "Desk", credential: "wrong" });
+		await apiClient.GET("/api/v1/projects");
+		await apiClient.GET("/api/v1/projects");
+
+		// The address survives a 401 — only the password is wrong — so the second
+		// request still goes to the same server, now with nothing to reject.
+		expect(seen).toEqual(["Bearer wrong", null]);
+		expect(getApiBaseUrl()).toBe("http://desk.local:3001");
 	});
 
 	it("returns unavailable without fetching when the daemon base URL is untrusted", async () => {

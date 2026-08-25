@@ -23,10 +23,12 @@ import {
 	type TerminalSessionState,
 } from "../hooks/useTerminalSession";
 import { useSessionBrowserLink } from "../hooks/useSessionBrowserLink";
-import { getApiBaseUrl } from "../lib/api-client";
+import { getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
+import { getServerCredential } from "../lib/server-target";
 import {
 	createTerminalMux,
 	createTerminalMuxPool,
+	muxAuthProtocols,
 	muxUrlFromApiBase,
 	type TerminalMux,
 	type TerminalMuxPool,
@@ -312,7 +314,7 @@ export function TerminalCacheProvider({
 	const muxPoolRef = useRef<TerminalMuxPool | null>(null);
 	if (!muxPoolRef.current) {
 		muxPoolRef.current = createTerminalMuxPool(() =>
-			createTerminalMux(muxUrlFromApiBase(getApiBaseUrl())),
+			createTerminalMux(muxUrlFromApiBase(getApiBaseUrl()), WebSocket, muxAuthProtocols(getServerCredential())),
 		);
 	}
 	const muxPool = muxPoolRef.current;
@@ -500,6 +502,12 @@ export function TerminalCacheProvider({
 		},
 		[rerender],
 	);
+
+	// The mux socket outlives a target change on its own: nothing about the
+	// operator picking a different server closes a socket that is still open to
+	// the old one, so every retained terminal would keep streaming the machine
+	// they navigated away from. Retire it here and let each attachment redial.
+	useEffect(() => subscribeApiBaseUrl(() => muxPool.reset()), [muxPool]);
 
 	// Daemon readiness and theme are shell-wide. Parked entries must observe
 	// them too so reconnect and rendering behavior never depends on the route

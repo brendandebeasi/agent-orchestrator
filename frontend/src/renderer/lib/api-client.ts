@@ -4,25 +4,37 @@ import type { DaemonStatus } from "../../shared/daemon-status";
 import { daemonFailureMessage } from "./daemon-failure";
 import { captureRendererEvent } from "./telemetry";
 import { captureApiErrorToSentry } from "./sentry";
+import {
+	clearServerCredential,
+	getServerCredential,
+	getServerTarget,
+	setLocalServerTarget,
+	subscribeServerTarget,
+} from "./server-target";
 
 function devApiBaseUrl(): string {
 	return typeof window === "undefined" ? "http://127.0.0.1:3001" : window.location.origin;
 }
 
-const explicitApiBaseUrl = import.meta.env.VITE_AO_API_BASE_URL;
-const initialApiBaseUrl = explicitApiBaseUrl ?? (import.meta.env.DEV ? devApiBaseUrl() : "http://127.0.0.1:3001");
+/**
+ * The base URL openapi-fetch builds its Requests against. It is fixed at module
+ * load, before any daemon is known, and every request is then rebased onto the
+ * current server target inside `runtimeFetch` — so this is a template, not a
+ * destination. It still matters that it is the likely destination: when it
+ * already matches the target, `runtimeFetch` can hand the untouched Request
+ * straight to `fetch`.
+ */
+const initialApiBaseUrl =
+	import.meta.env.VITE_AO_API_BASE_URL ?? (import.meta.env.DEV ? devApiBaseUrl() : "http://127.0.0.1:3001");
 
-let runtimeApiBaseUrl: string | null = explicitApiBaseUrl ?? null;
 let daemonStatus: DaemonStatus = { state: "stopped" };
 
-const baseUrlListeners = new Set<() => void>();
-
 export function getApiBaseUrl(): string {
-	return runtimeApiBaseUrl ?? "";
+	return getServerTarget().baseUrl ?? "";
 }
 
 export function hasTrustedApiBaseUrl(): boolean {
-	return runtimeApiBaseUrl !== null;
+	return getServerTarget().baseUrl !== null;
 }
 
 /**
@@ -30,18 +42,18 @@ export function hasTrustedApiBaseUrl(): boolean {
  * connections bound to a specific port — the terminal mux WebSocket, the SSE
  * stream — use this to rebind when the daemon comes back on a different port.
  */
-export function subscribeApiBaseUrl(listener: () => void): () => void {
-	baseUrlListeners.add(listener);
-	return () => {
-		baseUrlListeners.delete(listener);
-	};
-}
+export const subscribeApiBaseUrl = subscribeServerTarget;
 
+/**
+ * Point the API client at the local daemon, or at nothing while it is down.
+ *
+ * The base URL is no longer this module's to own — a client that can be aimed
+ * at another machine has a server target, of which the base URL is one field
+ * (see lib/server-target.ts). This remains as the supervisor's entry point into
+ * that state, which is the only caller that ever set it.
+ */
 export function setApiBaseUrl(nextBaseUrl: string | null): void {
-	const normalized = (nextBaseUrl ?? explicitApiBaseUrl ?? null)?.replace(/\/+$/, "") ?? null;
-	if (normalized === runtimeApiBaseUrl) return;
-	runtimeApiBaseUrl = normalized;
-	baseUrlListeners.forEach((listener) => listener());
+	setLocalServerTarget(nextBaseUrl);
 }
 
 // The renderer records every supervisor status here so API requests made while
@@ -208,7 +220,7 @@ function reportApiError(
 
 async function runtimeFetch(input: Request): Promise<Response> {
 	const operation = normalizeApiOperation(input.method, new URL(input.url).pathname);
-	const baseUrl = runtimeApiBaseUrl;
+	const { baseUrl } = getServerTarget();
 	if (baseUrl === null) {
 		reportApiError(operation, "daemon_unavailable", 503);
 		return new Response(JSON.stringify({ message: daemonFailureMessage(daemonStatus), code: daemonStatus.code }), {
@@ -217,27 +229,30 @@ async function runtimeFetch(input: Request): Promise<Response> {
 		});
 	}
 
-	const send = async (): Promise<Response> => {
-		if (!baseUrl) {
-			return fetch(input);
-		}
+	// Read once so the whole request — including the 401 handling below — sees
+	// one credential, rather than racing a disconnect that lands mid-flight.
+	const credential = getServerCredential();
 
+	const send = async (): Promise<Response> => {
 		const url = new URL(input.url);
-		const target = new URL(url.pathname + url.search + url.hash, baseUrl);
-		if (target.href === input.url) {
+		const destination = baseUrl ? new URL(url.pathname + url.search + url.hash, baseUrl) : url;
+		if (credential === null && destination.href === input.url) {
 			return fetch(input);
 		}
 
 		// Rebase onto the runtime base URL by copying fields explicitly and
-		// buffering the body. `new Request(target, input)` reads the source
+		// buffering the body. `new Request(destination, input)` reads the source
 		// request's `duplex` getter, which Electron's Chromium lacks — it throws
 		// "The duplex member must be specified" for any request with a body, so
 		// every POST would fail in the packaged app. API bodies are small JSON;
-		// buffering sidesteps streaming-duplex semantics entirely.
+		// buffering sidesteps streaming-duplex semantics entirely. Adding the
+		// credential takes the same path for the same reason.
+		const headers = new Headers(input.headers);
+		if (credential !== null) headers.set("Authorization", `Bearer ${credential}`);
 		const body = input.method === "GET" || input.method === "HEAD" ? undefined : await input.arrayBuffer();
-		return fetch(target, {
+		return fetch(destination, {
 			method: input.method,
-			headers: input.headers,
+			headers,
 			body,
 			signal: input.signal,
 			credentials: input.credentials,
@@ -258,6 +273,13 @@ async function runtimeFetch(input: Request): Promise<Response> {
 			reportApiError(operation, "network_error");
 		}
 		throw error;
+	}
+	if (response.status === 401 && credential !== null) {
+		// The address is right and the password is not — the password may have
+		// been rotated on the far side, or the daemon restarted with a new one.
+		// Dropping it now is what makes the client ask for a password instead of
+		// retrying a rejected one on every poll.
+		clearServerCredential();
 	}
 	if (!response.ok) {
 		// Best-effort read the daemon error envelope's `code` (via a clone so the

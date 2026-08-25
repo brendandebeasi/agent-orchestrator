@@ -30,40 +30,78 @@ vi.mock("./api-client", () => ({
 
 import { createEventTransport } from "./event-transport";
 import { getEventsConnectionState, setEventsConnectionState } from "./events-connection";
+import { clearServerCredential, setRemoteServerTarget } from "./server-target";
 
-class EventSourceStub {
-	static instances: EventSourceStub[] = [];
-	url: string;
-	closed = false;
-	readyState = 0; // CONNECTING
-	onopen: (() => void) | null = null;
-	onerror: (() => void) | null = null;
-	onmessage: (() => void) | null = null;
-	listeners: string[] = [];
-	handlers = new Map<string, (event: Event) => void>();
-	constructor(url: string) {
-		this.url = url;
-		EventSourceStub.instances.push(this);
-	}
-	addEventListener(type: string, listener: (event: Event) => void) {
-		this.listeners.push(type);
-		this.handlers.set(type, listener);
-	}
-	emit(type: string, data: string) {
-		this.handlers.get(type)?.({ data } as unknown as Event);
-	}
-	close() {
-		this.closed = true;
-		this.readyState = 2; // CLOSED
-	}
+type Attempt = { url: string; headers: Record<string, string>; signal: AbortSignal };
+
+// One connection attempt's response body, which the test pushes CDC frames into
+// and can close to simulate the daemon dropping the stream.
+type Pushable = { push: (text: string) => void; end: () => void };
+
+const attempts: Attempt[] = [];
+const bodies: Pushable[] = [];
+
+function pushableResponse(): Response {
+	let controller: ReadableStreamDefaultController<Uint8Array>;
+	const body = new ReadableStream<Uint8Array>({
+		start(c) {
+			controller = c;
+		},
+	});
+	bodies.push({
+		push: (text: string) => controller.enqueue(new TextEncoder().encode(text)),
+		end: () => controller.close(),
+	});
+	return new Response(body, { status: 200 });
 }
 
+function stubFetch() {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			attempts.push({
+				url: String(input),
+				headers: (init?.headers ?? {}) as Record<string, string>,
+				signal: init?.signal as AbortSignal,
+			});
+			return pushableResponse();
+		}),
+	);
+}
+
+let invalidateQueries = vi.fn();
+
 function fakeQueryClient() {
-	return { invalidateQueries: vi.fn() } as unknown as Parameters<typeof createEventTransport>[0];
+	invalidateQueries = vi.fn();
+	return { invalidateQueries } as unknown as Parameters<typeof createEventTransport>[0];
+}
+
+/** Connect and let the first attempt reach `onOpen`. */
+async function connect(queryClient = fakeQueryClient()): Promise<() => void> {
+	const disconnect = createEventTransport(queryClient).connect();
+	await vi.advanceTimersByTimeAsync(1);
+	return disconnect;
+}
+
+/**
+ * Connect, then flush and discard the refresh that every (re)open queues, so a
+ * test can assert on what the next event alone invalidated.
+ */
+async function connectSettled(queryClient = fakeQueryClient()): Promise<() => void> {
+	const disconnect = await connect(queryClient);
+	await vi.advanceTimersByTimeAsync(200);
+	invalidateQueries.mockClear();
+	return disconnect;
+}
+
+function daemonStatusHandler(): () => void {
+	return onStatusMock.mock.calls[0][0] as () => void;
 }
 
 beforeEach(() => {
-	EventSourceStub.instances = [];
+	vi.useFakeTimers();
+	attempts.length = 0;
+	bodies.length = 0;
 	onStatusMock.mockReset().mockReturnValue(removeStatusMock);
 	removeStatusMock.mockReset();
 	getApiBaseUrlMock.mockReset().mockReturnValue("http://127.0.0.1:3001");
@@ -71,236 +109,204 @@ beforeEach(() => {
 	subscribeApiBaseUrlMock.mockReset().mockReturnValue(unsubscribeBaseUrlMock);
 	unsubscribeBaseUrlMock.mockReset();
 	setEventsConnectionState("idle");
-	(globalThis as unknown as { EventSource: unknown }).EventSource = EventSourceStub;
+	stubFetch();
 });
 
 afterEach(() => {
-	delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
+	vi.useRealTimers();
+	vi.unstubAllGlobals();
+	vi.restoreAllMocks();
+	clearServerCredential();
 });
 
 describe("createEventTransport", () => {
-	it("opens a single SSE connection to the current base URL on connect", () => {
-		createEventTransport(fakeQueryClient()).connect();
+	it("opens a single stream against the current base URL on connect", async () => {
+		await connect();
 
-		expect(EventSourceStub.instances).toHaveLength(1);
-		expect(EventSourceStub.instances[0].url).toBe("http://127.0.0.1:3001/api/v1/events");
-		// All CDC event types plus onmessage are wired up.
-		expect(EventSourceStub.instances[0].listeners).toContain("session_updated");
-		expect(EventSourceStub.instances[0].listeners).toContain("review_run_created");
-		expect(EventSourceStub.instances[0].listeners).toContain("review_run_updated");
-		expect(EventSourceStub.instances[0].onmessage).toBeTypeOf("function");
+		expect(attempts).toHaveLength(1);
+		expect(attempts[0].url).toBe("http://127.0.0.1:3001/api/v1/events");
+		expect(attempts[0].headers).toMatchObject({ Accept: "text/event-stream" });
 	});
 
-	it("does not reconnect when a daemon status keeps the same base URL", () => {
-		createEventTransport(fakeQueryClient()).connect();
-		const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
+	it("sends the credential a remote daemon requires", async () => {
+		setRemoteServerTarget({ baseUrl: "http://desk.local:3001", label: "desk.local", credential: "hunter2" });
 
-		onStatusHandler();
+		await connect();
 
-		expect(EventSourceStub.instances).toHaveLength(1);
+		expect(attempts[0].headers).toMatchObject({ Authorization: "Bearer hunter2" });
 	});
 
-	it("closes the old connection and reconnects when the base URL changes", () => {
-		createEventTransport(fakeQueryClient()).connect();
-		const first = EventSourceStub.instances[0];
-		const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
+	it("does not reconnect when a daemon status keeps the same base URL", async () => {
+		await connect();
+
+		daemonStatusHandler()();
+		await vi.advanceTimersByTimeAsync(1);
+
+		expect(attempts).toHaveLength(1);
+	});
+
+	it("closes the old connection and reconnects when the base URL changes", async () => {
+		await connect();
 
 		getApiBaseUrlMock.mockReturnValue("http://127.0.0.1:3099");
-		onStatusHandler();
+		daemonStatusHandler()();
+		await vi.advanceTimersByTimeAsync(1);
 
-		expect(first.closed).toBe(true);
-		expect(EventSourceStub.instances).toHaveLength(2);
-		expect(EventSourceStub.instances[1].url).toBe("http://127.0.0.1:3099/api/v1/events");
+		expect(attempts[0].signal.aborted).toBe(true);
+		expect(attempts).toHaveLength(2);
+		expect(attempts[1].url).toBe("http://127.0.0.1:3099/api/v1/events");
 	});
 
-	it("closes the source and skips reconnecting when the base URL is untrusted", () => {
-		createEventTransport(fakeQueryClient()).connect();
-		const first = EventSourceStub.instances[0];
-		const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
+	it("closes the stream and skips reconnecting when the base URL is untrusted", async () => {
+		await connect();
 
 		hasTrustedApiBaseUrlMock.mockReturnValue(false);
-		onStatusHandler();
+		daemonStatusHandler()();
+		await vi.advanceTimersByTimeAsync(1);
 
-		expect(first.closed).toBe(true);
-		expect(EventSourceStub.instances).toHaveLength(1);
+		expect(attempts[0].signal.aborted).toBe(true);
+		expect(attempts).toHaveLength(1);
 		expect(getEventsConnectionState()).toBe("disconnected");
 	});
 
-	it("debounces workspace and session invalidation after a status change", () => {
-		vi.useFakeTimers();
-		try {
-			const queryClient = fakeQueryClient();
-			createEventTransport(queryClient).connect();
-			const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
+	it("debounces workspace and session invalidation after a status change", async () => {
+		await connectSettled();
 
-			onStatusHandler();
-			expect(queryClient.invalidateQueries).not.toHaveBeenCalled();
-			vi.advanceTimersByTime(200);
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspaces"] });
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-agent-switches"] });
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-scm-summary"] });
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage"] });
-		} finally {
-			vi.useRealTimers();
-		}
+		daemonStatusHandler()();
+		expect(invalidateQueries).not.toHaveBeenCalled();
+		await vi.advanceTimersByTimeAsync(200);
+
+		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["workspaces"] });
+		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-agent-switches"] });
+		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-scm-summary"] });
+		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage"] });
 	});
 
 	// A reconnect resumes via Last-Event-ID. When the event log has been truncated
 	// or replaced, that cursor is ahead of head and the daemon starts the client at
 	// head instead of replaying — correct, but it means no conversation CDC arrives
-	// to invalidate an open chat. EventSource cannot read the response header that
-	// reports the clamp, so reopening must refresh conversations unconditionally.
-	it("refreshes open conversations on reopen, not just workspaces", () => {
-		vi.useFakeTimers();
-		try {
-			const queryClient = fakeQueryClient();
-			createEventTransport(queryClient).connect();
-			EventSourceStub.instances[0].onopen?.();
+	// to invalidate an open chat. Nothing in the frames themselves reports that
+	// clamp, so reopening must refresh conversations unconditionally.
+	it("refreshes open conversations on reopen, not just workspaces", async () => {
+		await connect();
 
-			vi.advanceTimersByTime(200);
+		await vi.advanceTimersByTimeAsync(200);
 
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation"] });
-		} finally {
-			vi.useRealTimers();
-		}
+		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation"] });
 	});
 
-	it("invalidates only the named conversation for conversation CDC", () => {
-		vi.useFakeTimers();
-		try {
-			const queryClient = fakeQueryClient();
-			createEventTransport(queryClient).connect();
-			EventSourceStub.instances[0].emit(
-				"session_updated",
-				JSON.stringify({
-					seq: 42,
-					projectId: "proj-1",
+	it("invalidates only the named conversation for conversation CDC", async () => {
+		await connectSettled();
+
+		bodies[0].push(
+			`event: session_updated\ndata: ${JSON.stringify({
+				seq: 42,
+				projectId: "proj-1",
+				sessionId: "chat-1",
+				type: "session_updated",
+				payload: {
+					id: "chat-1",
 					sessionId: "chat-1",
-					type: "session_updated",
-					payload: {
-						id: "chat-1",
-						sessionId: "chat-1",
-						conversationId: "conv-1",
-						activity: "active",
-						isTerminated: false,
-					},
-					createdAt: "2026-08-04T15:15:14Z",
-				}),
-			);
+					conversationId: "conv-1",
+					activity: "active",
+					isTerminated: false,
+				},
+				createdAt: "2026-08-04T15:15:14Z",
+			})}\n\n`,
+		);
+		await vi.advanceTimersByTimeAsync(200);
 
-			vi.advanceTimersByTime(200);
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
-				queryKey: ["conversation", "chat-1"],
-			});
-			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] });
-			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({
-				queryKey: ["session-scm-summary"],
-			});
-		} finally {
-			vi.useRealTimers();
-		}
+		expect(invalidateQueries).toHaveBeenCalledWith({ queryKey: ["conversation", "chat-1"] });
+		expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] });
+		expect(invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-scm-summary"] });
 	});
 
-	it("invalidates the named interface transition status for transition CDC", () => {
-		vi.useFakeTimers();
-		try {
-			const queryClient = fakeQueryClient();
-			createEventTransport(queryClient).connect();
-			EventSourceStub.instances[0].emit(
-				"session_updated",
-				JSON.stringify({
-					seq: 43,
-					projectId: "proj-1",
-					sessionId: "session-1",
-					type: "session_updated",
-					payload: {
-						id: "session-1",
-						interfaceTransitionId: "transition-1",
-						interfaceTransitionPhase: "recovery_required",
-					},
-					createdAt: "2026-08-13T08:00:00Z",
-				}),
-			);
+	it("invalidates the named interface transition status for transition CDC", async () => {
+		await connectSettled();
 
-			vi.advanceTimersByTime(200);
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({
-				queryKey: ["session-interface-transition", "session-1"],
-			});
-		} finally {
-			vi.useRealTimers();
-		}
+		bodies[0].push(
+			`event: session_updated\ndata: ${JSON.stringify({
+				seq: 43,
+				projectId: "proj-1",
+				sessionId: "session-1",
+				type: "session_updated",
+				payload: {
+					id: "session-1",
+					interfaceTransitionId: "transition-1",
+					interfaceTransitionPhase: "recovery_required",
+				},
+				createdAt: "2026-08-13T08:00:00Z",
+			})}\n\n`,
+		);
+		await vi.advanceTimersByTimeAsync(200);
+
+		expect(invalidateQueries).toHaveBeenCalledWith({
+			queryKey: ["session-interface-transition", "session-1"],
+		});
 	});
 
-	it("tears down the source and the daemon listener on disconnect", () => {
-		const disconnect = createEventTransport(fakeQueryClient()).connect();
+	it("ignores a named frame this client does not act on", async () => {
+		await connectSettled();
+
+		bodies[0].push('event: heartbeat\ndata: {"seq":1}\n\n');
+		await vi.advanceTimersByTimeAsync(200);
+
+		expect(invalidateQueries).not.toHaveBeenCalled();
+	});
+
+	it("tears down the stream and the daemon listener on disconnect", async () => {
+		const disconnect = await connect();
 
 		disconnect();
 
-		expect(EventSourceStub.instances[0].closed).toBe(true);
+		expect(attempts[0].signal.aborted).toBe(true);
 		expect(removeStatusMock).toHaveBeenCalledTimes(1);
 	});
 
-	it("is a no-op when EventSource is unavailable", () => {
-		delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
-
-		expect(() => createEventTransport(fakeQueryClient()).connect()).not.toThrow();
-		expect(EventSourceStub.instances).toHaveLength(0);
-	});
-
-	it("marks the stream connected on open and disconnected on error", () => {
-		createEventTransport(fakeQueryClient()).connect();
-		const source = EventSourceStub.instances[0];
-
-		source.readyState = 1; // OPEN
-		source.onopen?.();
+	it("marks the stream connected on open and disconnected when it drops", async () => {
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		await connect();
 		expect(getEventsConnectionState()).toBe("connected");
 
-		source.readyState = 0; // CONNECTING — browser is auto-retrying
-		source.onerror?.();
+		bodies[0].end();
+		await vi.advanceTimersByTimeAsync(1);
 		expect(getEventsConnectionState()).toBe("disconnected");
 
-		source.readyState = 1;
-		source.onopen?.();
+		await vi.advanceTimersByTimeAsync(1_100);
 		expect(getEventsConnectionState()).toBe("connected");
 	});
 
-	it("rebuilds a source the browser abandoned after the retry delay", () => {
-		vi.useFakeTimers();
-		try {
-			createEventTransport(fakeQueryClient()).connect();
-			const source = EventSourceStub.instances[0];
+	it("reconnects after backoff when the daemon drops the stream", async () => {
+		vi.spyOn(Math, "random").mockReturnValue(0.5);
+		await connect();
 
-			source.readyState = 2; // CLOSED — EventSource gave up for good
-			source.onerror?.();
+		bodies[0].end();
+		await vi.advanceTimersByTimeAsync(1);
+		expect(attempts).toHaveLength(1);
 
-			expect(EventSourceStub.instances).toHaveLength(1);
-			vi.advanceTimersByTime(5_000);
-			expect(EventSourceStub.instances).toHaveLength(2);
-			expect(EventSourceStub.instances[1].url).toBe("http://127.0.0.1:3001/api/v1/events");
-		} finally {
-			vi.useRealTimers();
-		}
+		await vi.advanceTimersByTimeAsync(900);
+		expect(attempts).toHaveLength(1);
+		await vi.advanceTimersByTimeAsync(200);
+		expect(attempts).toHaveLength(2);
+		expect(attempts[1].url).toBe("http://127.0.0.1:3001/api/v1/events");
 	});
 
-	it("reconnects when the API base URL changes out-of-band", () => {
-		createEventTransport(fakeQueryClient()).connect();
+	it("reconnects when the API base URL changes out-of-band", async () => {
+		await connect();
 		expect(subscribeApiBaseUrlMock).toHaveBeenCalledTimes(1);
 		const onBaseUrlChange = subscribeApiBaseUrlMock.mock.calls[0][0] as () => void;
-		const first = EventSourceStub.instances[0];
 
 		getApiBaseUrlMock.mockReturnValue("http://127.0.0.1:4555");
 		onBaseUrlChange();
+		await vi.advanceTimersByTimeAsync(1);
 
-		expect(first.closed).toBe(true);
-		expect(EventSourceStub.instances).toHaveLength(2);
-		expect(EventSourceStub.instances[1].url).toBe("http://127.0.0.1:4555/api/v1/events");
+		expect(attempts[0].signal.aborted).toBe(true);
+		expect(attempts).toHaveLength(2);
+		expect(attempts[1].url).toBe("http://127.0.0.1:4555/api/v1/events");
 	});
 
-	it("resets the connection state and unsubscribes on disconnect", () => {
-		const disconnect = createEventTransport(fakeQueryClient()).connect();
-		const source = EventSourceStub.instances[0];
-		source.readyState = 1;
-		source.onopen?.();
+	it("resets the connection state and unsubscribes on disconnect", async () => {
+		const disconnect = await connect();
 		expect(getEventsConnectionState()).toBe("connected");
 
 		disconnect();

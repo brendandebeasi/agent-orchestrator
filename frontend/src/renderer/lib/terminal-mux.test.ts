@@ -6,6 +6,7 @@ import {
 	createTerminalMux,
 	createTerminalMuxPool,
 	dataFrame,
+	muxAuthProtocols,
 	muxUrlFromApiBase,
 	openFrame,
 	resizeFrame,
@@ -52,6 +53,20 @@ describe("terminal-mux framing", () => {
 	it("uses the current origin for a relative dev API base", () => {
 		expect(muxUrlFromApiBase("")).toBe("ws://localhost:3000/mux");
 	});
+
+	it("offers no subprotocol for a server that authenticates nothing", () => {
+		expect(muxAuthProtocols(null)).toEqual([]);
+		expect(muxAuthProtocols("")).toEqual([]);
+	});
+
+	it("encodes the credential as the ao.auth subprotocol the daemon parses", () => {
+		// base64url without padding, matching base64.RawURLEncoding in
+		// backend/internal/httpd/auth.go — and safe to place in a header that is
+		// a comma-separated token list, which a raw password is not.
+		expect(muxAuthProtocols("hunter2")).toEqual(["ao.auth.aHVudGVyMg"]);
+		expect(muxAuthProtocols("a b,c/d?e+f")).toEqual(["ao.auth.YSBiLGMvZD9lK2Y"]);
+		expect(muxAuthProtocols("pässwörd")).toEqual(["ao.auth.cMOkc3N3w7ZyZA"]);
+	});
 });
 
 // Minimal fake socket so we can assert client behaviour without a live daemon.
@@ -62,7 +77,10 @@ class FakeSocket {
 	sent: string[] = [];
 	closed = false;
 	private listeners: Record<string, ((ev: unknown) => void)[]> = {};
-	constructor(public url: string) {
+	constructor(
+		public url: string,
+		public protocols: string | string[] = [],
+	) {
 		FakeSocket.instances.push(this);
 	}
 	addEventListener(type: string, cb: (ev: unknown) => void) {
@@ -92,6 +110,18 @@ class FakeSocket {
 describe("createTerminalMux client", () => {
 	afterEach(() => {
 		FakeSocket.instances = [];
+	});
+
+	it("hands the auth subprotocol to the socket, since a handshake carries no headers", () => {
+		createTerminalMux("ws://x/mux", FakeSocket as unknown as typeof WebSocket, muxAuthProtocols("hunter2"));
+
+		expect(FakeSocket.instances.at(-1)!.protocols).toEqual(["ao.auth.aHVudGVyMg"]);
+	});
+
+	it("offers nothing when the server needs no credential", () => {
+		createTerminalMux("ws://x/mux", FakeSocket as unknown as typeof WebSocket);
+
+		expect(FakeSocket.instances.at(-1)!.protocols).toEqual([]);
 	});
 
 	it("queues frames until open, then flushes them in order", () => {
@@ -262,5 +292,49 @@ describe("createTerminalMuxPool", () => {
 			}),
 		);
 		expect(data).toEqual([]);
+	});
+
+	it("reports the drop to every lease and redials on reset", () => {
+		const urls: string[] = [];
+		let url = "ws://old/mux";
+		const pool = createTerminalMuxPool(() => {
+			urls.push(url);
+			return createTerminalMux(url, FakeSocket as unknown as typeof WebSocket);
+		});
+		const first = pool.acquire();
+		const second = pool.acquire();
+		const states: string[] = [];
+		first.onConnectionChange((state) => states.push(`first:${state}`));
+		second.onConnectionChange((state) => states.push(`second:${state}`));
+		FakeSocket.instances[0].emitOpen();
+
+		url = "ws://new/mux";
+		pool.reset();
+
+		// The socket was healthy, so nothing else would have told the leases it is
+		// gone; without the explicit notice they wait on a dead connection.
+		expect(states).toEqual(["first:open", "second:open", "first:closed", "second:closed"]);
+		expect(FakeSocket.instances[0].closed).toBe(true);
+
+		const replacement = pool.acquire();
+		expect(urls).toEqual(["ws://old/mux", "ws://new/mux"]);
+		replacement.dispose();
+		first.dispose();
+		second.dispose();
+	});
+
+	it("is a no-op to reset a pool with no live socket", () => {
+		const pool = createTerminalMuxPool(() =>
+			createTerminalMux("ws://x/mux", FakeSocket as unknown as typeof WebSocket),
+		);
+		pool.reset();
+		expect(FakeSocket.instances).toHaveLength(0);
+
+		const lease = pool.acquire();
+		FakeSocket.instances[0].emitOpen();
+		FakeSocket.instances[0].emitClose();
+		pool.reset();
+		expect(FakeSocket.instances).toHaveLength(1);
+		lease.dispose();
 	});
 });

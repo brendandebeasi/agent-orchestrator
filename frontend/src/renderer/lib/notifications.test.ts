@@ -47,33 +47,50 @@ import {
 	recentNotificationsQueryKey,
 	unreadNotificationsQueryKey,
 } from "./notifications";
+import { clearServerCredential, setRemoteServerTarget } from "./server-target";
 
-class EventSourceStub {
-	static instances: EventSourceStub[] = [];
-	url: string;
-	closed = false;
-	readyState = 0;
-	onopen: (() => void) | null = null;
-	onerror: (() => void) | null = null;
-	listeners = new Map<string, (event: MessageEvent<string>) => void>();
+type Attempt = { url: string; headers: Record<string, string>; signal: AbortSignal };
 
-	constructor(url: string) {
-		this.url = url;
-		EventSourceStub.instances.push(this);
-	}
+const attempts: Attempt[] = [];
+const bodies: ReadableStreamDefaultController<Uint8Array>[] = [];
 
-	addEventListener(type: string, listener: EventListener) {
-		this.listeners.set(type, listener as (event: MessageEvent<string>) => void);
-	}
+// Answers every connection attempt with a body the test pushes frames into.
+function stubFetch() {
+	vi.stubGlobal(
+		"fetch",
+		vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+			attempts.push({
+				url: String(input),
+				headers: (init?.headers ?? {}) as Record<string, string>,
+				signal: init?.signal as AbortSignal,
+			});
+			return new Response(
+				new ReadableStream<Uint8Array>({
+					start(controller) {
+						bodies.push(controller);
+					},
+				}),
+				{ status: 200 },
+			);
+		}),
+	);
+}
 
-	dispatch(type: string, data: unknown) {
-		this.listeners.get(type)?.({ data: JSON.stringify(data) } as MessageEvent<string>);
-	}
+/** Push one named frame into the stream opened by the given attempt. */
+function emit(attempt: number, type: string, data: unknown): void {
+	bodies[attempt].enqueue(new TextEncoder().encode(`event: ${type}\ndata: ${JSON.stringify(data)}\n\n`));
+}
 
-	close() {
-		this.closed = true;
-		this.readyState = 2;
-	}
+/** Let the stream's reads and the callbacks they trigger run. */
+function flush(): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** Connect and let the first attempt reach `onOpen`. */
+async function connect(...args: Parameters<typeof createNotificationsTransport>): Promise<() => void> {
+	const disconnect = createNotificationsTransport(...args).connect();
+	await flush();
+	return disconnect;
 }
 
 function notification(overrides: Partial<NotificationDTO> = {}): NotificationDTO {
@@ -105,19 +122,21 @@ function setWindowState({ focused, visible }: { focused: boolean; visible: boole
 
 beforeEach(() => {
 	apiGetMock.mockReset();
-	EventSourceStub.instances = [];
+	attempts.length = 0;
+	bodies.length = 0;
 	getApiBaseUrlMock.mockReset().mockReturnValue("http://127.0.0.1:3001");
 	onStatusMock.mockReset().mockReturnValue(removeStatusMock);
 	removeStatusMock.mockReset();
 	showNotificationMock.mockReset().mockResolvedValue(undefined);
 	subscribeApiBaseUrlMock.mockReset().mockReturnValue(unsubscribeBaseUrlMock);
 	unsubscribeBaseUrlMock.mockReset();
-	(globalThis as unknown as { EventSource: unknown }).EventSource = EventSourceStub;
+	stubFetch();
 });
 
 afterEach(() => {
-	delete (globalThis as unknown as { EventSource?: unknown }).EventSource;
+	vi.unstubAllGlobals();
 	vi.restoreAllMocks();
+	clearServerCredential();
 });
 
 describe("notification cache helpers", () => {
@@ -378,26 +397,36 @@ describe("notification cache helpers", () => {
 });
 
 describe("createNotificationsTransport", () => {
-	it("opens the notification stream and invalidates unread notifications on open", () => {
+	it("opens the notification stream and invalidates unread notifications on open", async () => {
 		const qc = queryClient();
 		const invalidateSpy = vi.spyOn(qc, "invalidateQueries");
 
-		createNotificationsTransport(qc).connect();
-		EventSourceStub.instances[0].onopen?.();
+		await connect(qc);
 
-		expect(EventSourceStub.instances).toHaveLength(1);
-		expect(EventSourceStub.instances[0].url).toBe("http://127.0.0.1:3001/api/v1/notifications/stream");
+		expect(attempts).toHaveLength(1);
+		expect(attempts[0].url).toBe("http://127.0.0.1:3001/api/v1/notifications/stream");
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: unreadNotificationsQueryKey });
 		expect(invalidateSpy).toHaveBeenCalledWith({ queryKey: recentNotificationsQueryKey });
 	});
 
-	it("merges live notifications and shows one toast for a new id", () => {
-		const qc = queryClient();
-		createNotificationsTransport(qc).connect();
-		const source = EventSourceStub.instances[0];
+	it("sends the credential a remote daemon requires", async () => {
+		setRemoteServerTarget({ baseUrl: "http://desk.local:3001", label: "desk.local", credential: "hunter2" });
 
-		source.dispatch("notification_created", notification());
-		source.dispatch("notification_created", notification());
+		await connect(queryClient());
+
+		expect(attempts[0].headers).toMatchObject({
+			Accept: "text/event-stream",
+			Authorization: "Bearer hunter2",
+		});
+	});
+
+	it("merges live notifications and shows one toast for a new id", async () => {
+		const qc = queryClient();
+		await connect(qc);
+
+		emit(0, "notification_created", notification());
+		emit(0, "notification_created", notification());
+		await flush();
 
 		expect(getCachedNotifications(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey))).toHaveLength(1);
 		expect(getCachedNotifications(qc.getQueryData<NotificationsCache>(recentNotificationsQueryKey))).toHaveLength(1);
@@ -410,13 +439,13 @@ describe("createNotificationsTransport", () => {
 		});
 	});
 
-	it("patches resolvedAt on live unread/all caches when AO closes the issue", () => {
+	it("patches resolvedAt on live unread/all caches when AO closes the issue", async () => {
 		const qc = queryClient();
-		createNotificationsTransport(qc).connect();
-		const source = EventSourceStub.instances[0];
-		source.dispatch("notification_created", notification());
+		await connect(qc);
+		emit(0, "notification_created", notification());
 
-		source.dispatch("notification_resolved", notification({ resolvedAt: "2026-06-16T11:00:00Z" }));
+		emit(0, "notification_resolved", notification({ resolvedAt: "2026-06-16T11:00:00Z" }));
+		await flush();
 
 		expect(getCachedNotifications(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey))).toEqual([
 			expect.objectContaining({ id: "ntf_1", status: "unread", resolvedAt: "2026-06-16T11:00:00Z" }),
@@ -428,12 +457,13 @@ describe("createNotificationsTransport", () => {
 		expect(qc.getQueryData<NotificationsCache>(recentNotificationsQueryKey)?.pages[0]?.unresolvedCount).toBe(0);
 	});
 
-	it("suppresses the needs_input toast for the session the user is already watching", () => {
+	it("suppresses the needs_input toast for the session the user is already watching", async () => {
 		setWindowState({ focused: true, visible: true });
 		const qc = queryClient();
-		createNotificationsTransport(qc, () => "mer-1").connect();
+		await connect(qc, () => "mer-1");
 
-		EventSourceStub.instances[0].dispatch("notification_created", notification());
+		emit(0, "notification_created", notification());
+		await flush();
 
 		expect(getCachedNotifications(qc.getQueryData<NotificationsCache>(unreadNotificationsQueryKey))).toHaveLength(1);
 		expect(showNotificationMock).not.toHaveBeenCalled();
@@ -449,37 +479,49 @@ describe("createNotificationsTransport", () => {
 		{ activeSessionId: "mer-1", focused: true, reason: "the window is hidden", visible: false },
 		{ activeSessionId: "mer-1", focused: false, reason: "the window is visible but unfocused", visible: true },
 		{ activeSessionId: undefined, focused: true, reason: "no session is open", visible: true },
-	])("still shows the needs_input toast when $reason", ({ activeSessionId, focused, visible }) => {
+	])("still shows the needs_input toast when $reason", async ({ activeSessionId, focused, visible }) => {
 		setWindowState({ focused, visible });
-		createNotificationsTransport(queryClient(), () => activeSessionId).connect();
+		await connect(queryClient(), () => activeSessionId);
 
-		EventSourceStub.instances[0].dispatch("notification_created", notification());
+		emit(0, "notification_created", notification());
+		await flush();
 
 		expect(showNotificationMock).toHaveBeenCalledTimes(1);
 	});
 
 	it.each(["ready_to_merge", "pr_merged", "pr_closed_unmerged"] as const)(
 		"still shows the %s toast for the focused active session",
-		(type) => {
+		async (type) => {
 			setWindowState({ focused: true, visible: true });
-			createNotificationsTransport(queryClient(), () => "mer-1").connect();
+			await connect(queryClient(), () => "mer-1");
 
-			EventSourceStub.instances[0].dispatch("notification_created", notification({ type }));
+			emit(0, "notification_created", notification({ type }));
+			await flush();
 
 			expect(showNotificationMock).toHaveBeenCalledTimes(1);
 		},
 	);
 
-	it("reconnects when the API base URL changes", () => {
-		createNotificationsTransport(queryClient()).connect();
+	it("reconnects when the API base URL changes", async () => {
+		await connect(queryClient());
 		const onBaseUrlChange = subscribeApiBaseUrlMock.mock.calls[0][0] as () => void;
-		const first = EventSourceStub.instances[0];
 
 		getApiBaseUrlMock.mockReturnValue("http://127.0.0.1:4555");
 		onBaseUrlChange();
+		await flush();
 
-		expect(first.closed).toBe(true);
-		expect(EventSourceStub.instances).toHaveLength(2);
-		expect(EventSourceStub.instances[1].url).toBe("http://127.0.0.1:4555/api/v1/notifications/stream");
+		expect(attempts[0].signal.aborted).toBe(true);
+		expect(attempts).toHaveLength(2);
+		expect(attempts[1].url).toBe("http://127.0.0.1:4555/api/v1/notifications/stream");
+	});
+
+	it("stops the stream and the daemon listener on disconnect", async () => {
+		const disconnect = await connect(queryClient());
+
+		disconnect();
+
+		expect(attempts[0].signal.aborted).toBe(true);
+		expect(removeStatusMock).toHaveBeenCalledTimes(1);
+		expect(unsubscribeBaseUrlMock).toHaveBeenCalledTimes(1);
 	});
 });

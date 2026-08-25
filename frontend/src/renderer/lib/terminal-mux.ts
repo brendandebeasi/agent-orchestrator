@@ -83,6 +83,33 @@ export function muxUrlFromApiBase(apiBaseUrl: string): string {
 	return `${ws.replace(/\/+$/, "")}/mux`;
 }
 
+// Matches muxAuthSubprotocolPrefix in backend/internal/httpd/auth.go.
+const MUX_AUTH_SUBPROTOCOL_PREFIX = "ao.auth.";
+
+/** base64url without padding — RFC 4648 §5, matching Go's base64.RawURLEncoding. */
+function base64UrlNoPad(value: string): string {
+	const bytes = new TextEncoder().encode(value);
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
+/**
+ * The `Sec-WebSocket-Protocol` offer that carries the connection password, or
+ * an empty list for a server that authenticates nothing.
+ *
+ * The WebSocket constructor takes a URL and a subprotocol list and nothing
+ * else — a browser cannot set a header on the handshake — and the daemon
+ * refuses a token in the query string, where it would land in every proxy and
+ * access log along the way. The subprotocol list is the field that is left. The
+ * password is base64url-encoded because the header is a comma-separated list of
+ * tokens, which a raw password may not be.
+ */
+export function muxAuthProtocols(credential: string | null): string[] {
+	if (credential === null || credential === "") return [];
+	return [`${MUX_AUTH_SUBPROTOCOL_PREFIX}${base64UrlNoPad(credential)}`];
+}
+
 type DataListener = (bytes: Uint8Array) => void;
 type ExitListener = () => void;
 type OpenedListener = () => void;
@@ -121,6 +148,13 @@ export type TerminalMuxPool = {
 	 * browser-to-daemon mux socket.
 	 */
 	acquire: () => TerminalMux;
+	/**
+	 * Retire the shared socket and tell every lease it dropped, so the next
+	 * attach dials again. Used when the socket is bound to something that is no
+	 * longer current — a daemon that moved, a server the operator switched away
+	 * from — where the socket itself is still open and would otherwise be kept.
+	 */
+	reset: () => void;
 	/** Release the current shared socket and every listener (the pool stays reusable). */
 	dispose: () => void;
 };
@@ -140,8 +174,12 @@ function subscribeById<T>(map: Map<string, Set<T>>, id: string, listener: T): ()
  * layer: a dropped socket is reported through onConnectionChange("closed") and
  * the owner (useTerminalSession) decides whether to build a fresh client.
  */
-export function createTerminalMux(url: string, WebSocketImpl: typeof WebSocket = WebSocket): TerminalMux {
-	const socket = new WebSocketImpl(url);
+export function createTerminalMux(
+	url: string,
+	WebSocketImpl: typeof WebSocket = WebSocket,
+	protocols: string[] = [],
+): TerminalMux {
+	const socket = new WebSocketImpl(url, protocols);
 	const encoder = new TextEncoder();
 	const queue: string[] = [];
 	const dataListeners = new Map<string, Set<DataListener>>();
@@ -277,6 +315,13 @@ export function createTerminalMuxPool(createMux: () => TerminalMux): TerminalMux
 		mux: TerminalMux;
 		refs: number;
 		unsubscribeState: () => void;
+		/**
+		 * The lease-owned connection listeners, tracked here as well as on the
+		 * mux. `mux.dispose()` drops its listeners without emitting, so a forced
+		 * retirement has to notify through this copy or the leases would wait
+		 * forever on a socket that will never carry another frame.
+		 */
+		connectionListeners: Set<ConnectionListener>;
 	};
 
 	const connections = new Set<Connection>();
@@ -300,6 +345,7 @@ export function createTerminalMuxPool(createMux: () => TerminalMux): TerminalMux
 			mux,
 			refs: 0,
 			unsubscribeState: () => undefined,
+			connectionListeners: new Set(),
 		};
 		connection.unsubscribeState = mux.onConnectionChange((state) => {
 			if (state !== "closed") return;
@@ -359,13 +405,29 @@ export function createTerminalMuxPool(createMux: () => TerminalMux): TerminalMux
 			onExit: (id, listener) => subscribe(() => connection.mux.onExit(id, listener)),
 			onOpened: (id, listener) => subscribe(() => connection.mux.onOpened(id, listener)),
 			onError: (id, listener) => subscribe(() => connection.mux.onError(id, listener)),
-			onConnectionChange: (listener) => subscribe(() => connection.mux.onConnectionChange(listener)),
+			onConnectionChange: (listener) =>
+				subscribe(() => {
+					connection.connectionListeners.add(listener);
+					const unsubscribe = connection.mux.onConnectionChange(listener);
+					return () => {
+						connection.connectionListeners.delete(listener);
+						unsubscribe();
+					};
+				}),
 			dispose,
 		};
 	};
 
 	return {
 		acquire,
+		reset: () => {
+			const connection = current;
+			current = null;
+			if (!connection || connection.disposed || connection.closed) return;
+			connection.closed = true;
+			for (const listener of [...connection.connectionListeners]) listener("closed");
+			disposeConnection(connection);
+		},
 		dispose: () => {
 			current = null;
 			for (const connection of [...connections]) disposeConnection(connection);

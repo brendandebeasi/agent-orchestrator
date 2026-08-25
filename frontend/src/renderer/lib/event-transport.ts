@@ -1,6 +1,8 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { aoBridge } from "./bridge";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { serverAuthHeaders } from "./server-target";
+import { openEventStream } from "./sse";
 import { setEventsConnectionState } from "./events-connection";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
@@ -13,19 +15,13 @@ export type EventTransport = {
 };
 
 const INVALIDATE_DEBOUNCE_MS = 150;
-// How long to wait before rebuilding an EventSource the browser gave up on
-// (readyState CLOSED — e.g. the daemon answered with a non-SSE response).
-const SSE_RETRY_MS = 5_000;
-// EventSource.CLOSED, referenced numerically so test stubs without the static
-// constants still work.
-const EVENTSOURCE_CLOSED = 2;
 
 // CDC event types the daemon pushes over the SSE stream (see
 // backend/internal/cdc/event.go). The SSE writer tags each frame with
-// `event: <type>`, so named events bypass EventSource.onmessage and must be
-// subscribed explicitly. Every one of these can change the project/session list
-// the sidebar renders, so they all trigger a (debounced) workspace refetch.
-const CDC_EVENT_TYPES = [
+// `event: <type>`. Every one of these can change the project/session list the
+// sidebar renders, so they all trigger a (debounced) workspace refetch; a named
+// type not in this set is one this client does not act on.
+const CDC_EVENT_TYPES = new Set([
 	"session_created",
 	"session_updated",
 	"pr_created",
@@ -36,7 +32,7 @@ const CDC_EVENT_TYPES = [
 	"pr_review_thread_resolved",
 	"review_run_created",
 	"review_run_updated",
-] as const;
+]);
 
 /**
  * Wires live server state into the TanStack Query cache. Two sources feed it:
@@ -53,23 +49,20 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 			const pendingInterfaceTransitionSessions = new Set<string>();
 			let workspaceInvalidationPending = false;
 			let allConversationsInvalidationPending = false;
-			let retryTimer: ReturnType<typeof setTimeout> | undefined;
-			let source: EventSource | undefined;
-			let sourceBaseUrl: string | undefined;
-			const refreshWorkspaces = (event?: Event) => {
+			const refreshWorkspaces = (data?: string) => {
 				let conversationOnly = false;
-				if (event === undefined) {
+				if (data === undefined) {
 					// A lifecycle refresh -- reconnect, daemon status change, base-URL change --
 					// carries no event, so we cannot know which conversations moved. Normally the
 					// replay that follows tells us, but when the event log has been truncated the
-					// daemon starts us at head and no CDC arrives at all. EventSource cannot read
+					// daemon starts us at head and no CDC arrives at all. The stream does not read
 					// the header reporting that clamp, so refresh every conversation instead of
 					// leaving an open chat frozen on its pre-gap snapshot.
 					allConversationsInvalidationPending = true;
 				}
-				if (event && "data" in event) {
+				if (data !== undefined) {
 					try {
-						const decoded = JSON.parse(String((event as MessageEvent).data)) as {
+						const decoded = JSON.parse(data) as {
 							sessionId?: unknown;
 							payload?: unknown;
 						};
@@ -134,71 +127,54 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				}, INVALIDATE_DEBOUNCE_MS);
 			};
 
-			const scheduleRetry = () => {
-				if (retryTimer) return;
-				retryTimer = setTimeout(() => {
-					retryTimer = undefined;
-					connectSource();
-				}, SSE_RETRY_MS);
-			};
+			// The base URL the stream is currently bound to, or undefined while no
+			// server is trusted.
+			const currentBaseUrl = () => (hasTrustedApiBaseUrl() ? getApiBaseUrl() : undefined);
+			let boundBaseUrl = currentBaseUrl();
 
-			const connectSource = () => {
-				// EventSource is unavailable in jsdom (tests) and some preview surfaces; guard it.
-				if (typeof EventSource === "undefined") return;
-				if (!hasTrustedApiBaseUrl()) {
-					source?.close();
-					source = undefined;
-					sourceBaseUrl = undefined;
+			const stream = openEventStream({
+				url: () => {
+					const baseUrl = currentBaseUrl();
+					return baseUrl === undefined ? null : `${baseUrl.replace(/\/+$/, "")}/api/v1/events`;
+				},
+				headers: serverAuthHeaders,
+				onOpen: () => {
+					setEventsConnectionState("connected");
+					// Events emitted during the gap were lost; refetch once on (re)open.
+					refreshWorkspaces();
+				},
+				onDisconnect: () => {
+					// The stream retries on its own; surface the gap so the UI does not
+					// present a frozen snapshot as live.
 					setEventsConnectionState("disconnected");
-					return;
-				}
-				const baseUrl = getApiBaseUrl();
-				// Keep a still-usable source on the same base URL; replace one the
-				// browser abandoned (CLOSED) or one bound to a stale port.
-				if (source && sourceBaseUrl === baseUrl && source.readyState !== EVENTSOURCE_CLOSED) return;
-				source?.close();
-				source = undefined;
-				sourceBaseUrl = baseUrl;
-				try {
-					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/events`);
-					source.onopen = () => {
-						setEventsConnectionState("connected");
-						// Events emitted during the gap were lost; refetch once on (re)open.
-						refreshWorkspaces();
-					};
-					source.onerror = () => {
-						// While readyState is CONNECTING the browser retries on its own;
-						// either way the stream is not delivering, so surface it instead
-						// of looping silently against a dead daemon.
-						setEventsConnectionState("disconnected");
-						if (source?.readyState === EVENTSOURCE_CLOSED) scheduleRetry();
-					};
-					source.onmessage = refreshWorkspaces; // unnamed events, if any
-					for (const type of CDC_EVENT_TYPES) {
-						source.addEventListener(type, refreshWorkspaces);
-					}
-					// EventSource auto-reconnects and resumes via Last-Event-ID while
-					// CONNECTING; scheduleRetry only covers the terminal CLOSED state.
-				} catch {
-					source = undefined;
-				}
+				},
+				onEvent: (event) => {
+					if (event.type !== "message" && !CDC_EVENT_TYPES.has(event.type)) return;
+					refreshWorkspaces(event.data);
+				},
+			});
+
+			const rebind = () => {
+				boundBaseUrl = currentBaseUrl();
+				stream.restart();
 			};
 
 			const removeDaemonListener = aoBridge.daemon.onStatus(() => {
-				connectSource();
+				// A status event that leaves the daemon where it was does not disturb a
+				// working stream; one that moves it rebinds without waiting out backoff.
+				if (currentBaseUrl() !== boundBaseUrl) rebind();
 				refreshWorkspaces();
 			});
-			// Rebind when the daemon comes back on a different port, independent of
-			// status-event ordering.
-			const removeBaseUrlListener = subscribeApiBaseUrl(connectSource);
-			connectSource();
+			// The target store notifies only on a real change — a different port, a
+			// different machine, a credential that was accepted or rejected — and any
+			// of those leaves the open stream bound to the wrong thing.
+			const removeBaseUrlListener = subscribeApiBaseUrl(rebind);
 
 			return () => {
 				if (debounce) clearTimeout(debounce);
-				if (retryTimer) clearTimeout(retryTimer);
 				removeDaemonListener();
 				removeBaseUrlListener();
-				source?.close();
+				stream.close();
 				setEventsConnectionState("idle");
 			};
 		},

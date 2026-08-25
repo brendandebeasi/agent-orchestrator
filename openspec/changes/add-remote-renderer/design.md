@@ -43,8 +43,8 @@ current tree:
 - One network listener, one credential, one auth middleware — extended, not duplicated.
 - Fail-closed route policy: newly reachable routes are named individually, never opened by
   removing a block.
-- A browser can authenticate every transport it needs (HTTP, WebSocket, static assets)
-  without a token in a URL.
+- A browser can authenticate every transport it needs (HTTP, WebSocket, the change-event
+  stream, static assets) without a token in a URL.
 - The renderer picks its server at runtime; the same bundle serves Electron-local,
   Electron-remote, and browser.
 - Host-bound features fail visibly (absent or disabled with a reason), never silently on
@@ -148,6 +148,37 @@ forge. Net CSRF surface: none.
 *Alternative considered:* serve assets unauthenticated (they contain no user data).
 Rejected — an unauthenticated bundle fingerprints the service and its exact version to
 anything that can reach the port, and the spec commits to authenticating assets.
+
+### D5a. The change-event stream is read by `fetch`, not by `EventSource`
+
+Found while implementing D5, which is why it is numbered as an amendment to it rather than
+folded in silently: the renderer learns about every session, project, and workspace change
+from `GET /api/v1/events`, an SSE stream opened with `EventSource`. A remote client without
+it is not degraded, it is dead — nothing on screen would ever update.
+
+`EventSource` is the one transport with no way to present a credential. It sets no headers,
+negotiates no subprotocol, and the spec forbids the query string. That leaves two answers:
+
+1. Honor `ao_web` on `GET /api/v1/events` as well as the asset path.
+2. Stop using `EventSource` and read the stream with `fetch`, which takes headers like any
+   other request.
+
+**Chosen: (2).** (1) would put a cookie on an API route, and the whole reason D5's cookie is
+defensible is that it is confined to reads of static files. `SameSite=Strict` would in fact
+stop a cross-site read today, but the invariant "no cookie ever authenticates `/api`" is
+worth more than the code it saves: it is checkable by reading one function, where the
+cookie-on-API version is only safe as long as every future route under it stays a read.
+
+The cost is real and paid once: `EventSource`'s automatic reconnect and its `Last-Event-ID`
+resume have to be written by hand. Resume is the smaller half of that — the daemon already
+accepts `?after=<seq>` as an equivalent to the header, and the reader tracks the last `id:`
+it saw. Reconnect becomes an explicit backoff loop, which the transport already half-owns:
+it runs its own retry timer today for the terminal `CLOSED` state that `EventSource` does
+not retry out of.
+
+*Alternative considered:* keep `EventSource` on loopback and use the `fetch` reader only
+for a remote target. Rejected — two implementations of the same stream, and the one that
+runs in development would not be the one that runs remotely.
 
 ### D6. The web bundle is embedded behind a build tag
 

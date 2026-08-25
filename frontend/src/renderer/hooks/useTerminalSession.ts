@@ -16,7 +16,8 @@ import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { getApiBaseUrl } from "../lib/api-client";
 import { captureRendererEvent } from "../lib/telemetry";
-import { createTerminalMux, muxUrlFromApiBase, type TerminalMux } from "../lib/terminal-mux";
+import { createTerminalMux, muxAuthProtocols, muxUrlFromApiBase, type TerminalMux } from "../lib/terminal-mux";
+import { getServerCredential } from "../lib/server-target";
 import { sessionIsActive, type WorkspaceSession } from "../types/workspace";
 import { workspaceQueryKey } from "./useWorkspaceQuery";
 
@@ -141,8 +142,9 @@ const REPLAY_WRITE_BATCH_BYTES = 256 * 1024;
 const REPLAY_FIRST_BYTE_MS = 250;
 
 function defaultCreateMux(): TerminalMux {
-	// Resolved per connect, not per hook: a daemon restart can change the port.
-	return createTerminalMux(muxUrlFromApiBase(getApiBaseUrl()));
+	// Resolved per connect, not per hook: a daemon restart can change the port,
+	// and the operator can point the client at a different daemon entirely.
+	return createTerminalMux(muxUrlFromApiBase(getApiBaseUrl()), WebSocket, muxAuthProtocols(getServerCredential()));
 }
 
 export function useTerminalSession(session: WorkspaceSession | undefined, options: UseTerminalSessionOptions) {

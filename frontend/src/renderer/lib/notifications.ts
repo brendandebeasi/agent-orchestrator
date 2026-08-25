@@ -2,6 +2,8 @@ import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { aoBridge } from "./bridge";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { serverAuthHeaders } from "./server-target";
+import { openEventStream } from "./sse";
 
 export type NotificationDTO = components["schemas"]["NotificationResponse"];
 export type NotificationsPage = components["schemas"]["ListNotificationsResponse"];
@@ -11,9 +13,6 @@ export type NotificationListStatus = "unread" | "all";
 export const unreadNotificationsQueryKey = ["notifications", "history", "unread"] as const;
 export const recentNotificationsQueryKey = ["notifications", "history", "all"] as const;
 export const NOTIFICATION_PAGE_SIZE = 100;
-
-const SSE_RETRY_MS = 5_000;
-const EVENTSOURCE_CLOSED = 2;
 
 /**
  * Only these two kinds describe something still waiting on the user.
@@ -287,39 +286,22 @@ export function createNotificationsTransport(
 ) {
 	return {
 		connect() {
-			let retryTimer: ReturnType<typeof setTimeout> | undefined;
-			let source: EventSource | undefined;
-			let sourceBaseUrl: string | undefined;
-
 			const invalidateNotifications = () => {
 				void queryClient.invalidateQueries({ queryKey: unreadNotificationsQueryKey });
 				void queryClient.invalidateQueries({ queryKey: recentNotificationsQueryKey });
 			};
 
-			const scheduleRetry = () => {
-				if (retryTimer) return;
-				retryTimer = setTimeout(() => {
-					retryTimer = undefined;
-					connectSource();
-				}, SSE_RETRY_MS);
-			};
+			const currentBaseUrl = () => getApiBaseUrl();
+			let boundBaseUrl = currentBaseUrl();
 
-			const connectSource = () => {
-				if (typeof EventSource === "undefined") return;
-				const baseUrl = getApiBaseUrl();
-				if (source && sourceBaseUrl === baseUrl && source.readyState !== EVENTSOURCE_CLOSED) return;
-				source?.close();
-				source = undefined;
-				sourceBaseUrl = baseUrl;
-				try {
-					source = new EventSource(`${baseUrl.replace(/\/+$/, "")}/api/v1/notifications/stream`);
-					source.onopen = invalidateNotifications;
-					source.onerror = () => {
-						if (source?.readyState === EVENTSOURCE_CLOSED) scheduleRetry();
-					};
-					source.addEventListener("notification_created", (event) => {
-						const notification = parseNotificationEvent(event);
-						if (!notification) return;
+			const stream = openEventStream({
+				url: () => `${currentBaseUrl().replace(/\/+$/, "")}/api/v1/notifications/stream`,
+				headers: serverAuthHeaders,
+				onOpen: invalidateNotifications,
+				onEvent: (event) => {
+					const notification = parseNotificationEvent(event.data);
+					if (!notification) return;
+					if (event.type === "notification_created") {
 						const inserted = mergeUnreadNotification(queryClient, notification);
 						mergeRecentNotification(queryClient, notification);
 						if (inserted && !suppressToastForWatchedSession(notification, getVisibleAgentSessionId())) {
@@ -330,43 +312,42 @@ export function createNotificationsTransport(
 								type: notification.type,
 							});
 						}
-					});
+						return;
+					}
 					// AO closed the underlying issue (the session got its input, the
 					// PR stopped waiting on a merge). Patch the row live so an open
 					// panel reflects that without waiting for a refetch.
-					source.addEventListener("notification_resolved", (event) => {
-						const notification = parseNotificationEvent(event);
-						if (!notification) return;
+					if (event.type === "notification_resolved") {
 						applyResolvedNotification(queryClient, notification);
-					});
-				} catch {
-					source = undefined;
-				}
+					}
+				},
+			});
+
+			const rebind = () => {
+				boundBaseUrl = currentBaseUrl();
+				stream.restart();
 			};
 
 			const removeDaemonListener = aoBridge.daemon.onStatus(() => {
-				connectSource();
+				if (currentBaseUrl() !== boundBaseUrl) rebind();
 				invalidateNotifications();
 			});
 			const removeBaseUrlListener = subscribeApiBaseUrl(() => {
-				connectSource();
+				rebind();
 				invalidateNotifications();
 			});
-			connectSource();
 
 			return () => {
-				if (retryTimer) clearTimeout(retryTimer);
 				removeDaemonListener();
 				removeBaseUrlListener();
-				source?.close();
+				stream.close();
 			};
 		},
 	};
 }
 
-function parseNotificationEvent(event: Event): NotificationDTO | null {
-	const data = (event as MessageEvent<string>).data;
-	if (typeof data !== "string" || data === "") return null;
+function parseNotificationEvent(data: string): NotificationDTO | null {
+	if (data === "") return null;
 	try {
 		return JSON.parse(data) as NotificationDTO;
 	} catch {

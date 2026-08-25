@@ -23,11 +23,13 @@ const {
 	terminalError,
 	terminalState,
 	replaySettled,
+	serverTargetListeners,
 	terminalSessionOptions,
 	xtermMounts,
 	xtermUnmounts,
 } = vi.hoisted(
 	() => ({
+		serverTargetListeners: new Set<() => void>(),
 		attachMock: vi.fn(() => vi.fn()),
 		getMock: vi.fn(async (_path: string, _options: unknown) => ({ data: undefined })),
 		postMock: vi.fn(),
@@ -51,6 +53,13 @@ vi.mock("../lib/api-client", () => ({
 		POST: (...args: unknown[]) => postMock(...args),
 	},
 	apiErrorMessage: (_error: unknown, fallback: string) => fallback,
+	getApiBaseUrl: () => "http://127.0.0.1:3001",
+	subscribeApiBaseUrl: (listener: () => void) => {
+		serverTargetListeners.add(listener);
+		return () => {
+			serverTargetListeners.delete(listener);
+		};
+	},
 }));
 
 vi.mock("./XtermTerminal", () => ({

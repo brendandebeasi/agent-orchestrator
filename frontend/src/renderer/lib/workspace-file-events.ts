@@ -1,24 +1,20 @@
 import type { QueryClient } from "@tanstack/react-query";
 import { getApiBaseUrl, hasTrustedApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { serverAuthHeaders } from "./server-target";
+import { type EventStream, openEventStream } from "./sse";
 
 const INVALIDATE_DEBOUNCE_MS = 150;
-const SSE_RETRY_MS = 5_000;
-const SSE_RETRY_JITTER_MS = 1_000;
-const EVENTSOURCE_CLOSED = 2;
+const DEGRADED_AFTER_FAILURES = 3;
 
 export type WorkspaceFileConnectionState = "connecting" | "connected" | "degraded";
-type ConnectionPhase = "idle" | "connecting" | "open" | "waiting";
 
 type WorkspaceStream = {
 	refs: number;
 	disposed: boolean;
-	phase: ConnectionPhase;
-	generation: number;
 	failures: number;
-	source?: EventSource;
+	source?: EventStream;
 	sourceBaseUrl?: string;
 	debounce?: ReturnType<typeof setTimeout>;
-	retry?: ReturnType<typeof setTimeout>;
 	disconnectBaseUrl: () => void;
 	ensureConnected: () => void;
 	dispose: () => void;
@@ -83,97 +79,70 @@ function createWorkspaceStream(sessionId: string, queryClient: QueryClient): Wor
 			void queryClient.invalidateQueries({ queryKey: ["session-workspace-file", sessionId] });
 		}, INVALIDATE_DEBOUNCE_MS);
 	};
-	const scheduleRetry = (generation: number) => {
-		if (stream.disposed || stream.retry) return;
-		stream.phase = "waiting";
-		const delay = SSE_RETRY_MS + (Math.random() * 2 - 1) * SSE_RETRY_JITTER_MS;
-		stream.retry = setTimeout(() => {
-			stream.retry = undefined;
-			if (stream.disposed || generation !== stream.generation) return;
-			stream.phase = "idle";
-			stream.ensureConnected();
-		}, delay);
-	};
-	const resetConnection = () => {
-		stream.generation += 1;
-		if (stream.retry) clearTimeout(stream.retry);
-		stream.retry = undefined;
-		stream.source?.close();
-		stream.source = undefined;
-		stream.sourceBaseUrl = undefined;
-		stream.phase = "idle";
-	};
-	const handleTerminalFailure = (generation: number) => {
-		if (stream.disposed || generation !== stream.generation) return;
-		stream.source?.close();
-		stream.source = undefined;
-		stream.failures += 1;
-		setWorkspaceFileConnectionState(sessionId, stream.failures >= 3 ? "degraded" : "connecting");
-		scheduleRetry(generation);
-	};
 	stream.refs = 0;
 	stream.disposed = false;
-	stream.phase = "idle";
-	stream.generation = 0;
 	stream.failures = 0;
 	setWorkspaceFileConnectionState(sessionId, "connecting");
+
 	stream.ensureConnected = () => {
 		if (stream.disposed) return;
-		if (typeof EventSource === "undefined") {
-			setWorkspaceFileConnectionState(sessionId, "degraded");
-			return;
-		}
-		if (!hasTrustedApiBaseUrl()) {
-			resetConnection();
-			setWorkspaceFileConnectionState(sessionId, "connecting");
-			return;
-		}
-		const baseUrl = getApiBaseUrl();
-		if (stream.sourceBaseUrl && stream.sourceBaseUrl !== baseUrl) {
-			resetConnection();
-			stream.failures = 0;
-			setWorkspaceFileConnectionState(sessionId, "connecting");
-		}
-		if (stream.phase !== "idle") return;
-
-		stream.sourceBaseUrl = baseUrl;
-		stream.phase = "connecting";
-		const generation = ++stream.generation;
-		try {
-			const source = new EventSource(
-				`${baseUrl.replace(/\/+$/, "")}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/events`,
-			);
-			stream.source = source;
-			source.onopen = () => {
-				if (stream.disposed || generation !== stream.generation || stream.source !== source) return;
-				stream.phase = "open";
-				stream.failures = 0;
-				setWorkspaceFileConnectionState(sessionId, "connected");
-				invalidate();
-			};
-			source.onerror = () => {
-				if (stream.disposed || generation !== stream.generation || stream.source !== source) return;
-				if (source.readyState === EVENTSOURCE_CLOSED) {
-					handleTerminalFailure(generation);
-					return;
-				}
-				stream.failures += 1;
-				setWorkspaceFileConnectionState(sessionId, stream.failures >= 3 ? "degraded" : "connecting");
-			};
-			source.addEventListener("workspace_changed", () => {
-				if (!stream.disposed && generation === stream.generation && stream.source === source) invalidate();
+		const baseUrl = hasTrustedApiBaseUrl() ? getApiBaseUrl() : undefined;
+		if (!stream.source) {
+			stream.sourceBaseUrl = baseUrl;
+			stream.source = openEventStream({
+				url: () => {
+					// Read afresh on every attempt rather than closing over a base
+					// URL: a retry that fires after the daemon moved should follow it
+					// instead of hammering the address it used to answer on.
+					if (!hasTrustedApiBaseUrl()) return null;
+					const base = getApiBaseUrl().replace(/\/+$/, "");
+					return `${base}/api/v1/sessions/${encodeURIComponent(sessionId)}/workspace/events`;
+				},
+				headers: serverAuthHeaders,
+				onOpen: () => {
+					if (stream.disposed) return;
+					stream.failures = 0;
+					setWorkspaceFileConnectionState(sessionId, "connected");
+					// The watcher only reports edges, so whatever changed while we
+					// were away is invisible to us. Refetch once on connect.
+					invalidate();
+				},
+				onEvent: (event) => {
+					if (stream.disposed) return;
+					if (event.type === "workspace_changed") invalidate();
+				},
+				onDisconnect: () => {
+					if (stream.disposed) return;
+					if (!hasTrustedApiBaseUrl()) {
+						// There was no daemon to reach, so this says nothing about the
+						// health of the watcher. Stay "connecting" and wait for the
+						// base URL subscription to restart us.
+						setWorkspaceFileConnectionState(sessionId, "connecting");
+						return;
+					}
+					stream.failures += 1;
+					const degraded = stream.failures >= DEGRADED_AFTER_FAILURES;
+					setWorkspaceFileConnectionState(sessionId, degraded ? "degraded" : "connecting");
+				},
 			});
-		} catch {
-			stream.source = undefined;
-			handleTerminalFailure(generation);
+			return;
 		}
+		if (stream.sourceBaseUrl === baseUrl) return;
+		// The daemon moved. Failures counted against the old address say nothing
+		// about the new one, so the badge starts over rather than opening degraded.
+		stream.sourceBaseUrl = baseUrl;
+		stream.failures = 0;
+		setWorkspaceFileConnectionState(sessionId, "connecting");
+		stream.source.restart();
 	};
+
 	stream.disconnectBaseUrl = subscribeApiBaseUrl(stream.ensureConnected);
 	stream.dispose = () => {
 		stream.disposed = true;
 		if (stream.debounce) clearTimeout(stream.debounce);
 		stream.disconnectBaseUrl();
-		resetConnection();
+		stream.source?.close();
+		stream.source = undefined;
 	};
 	stream.ensureConnected();
 	return stream;
