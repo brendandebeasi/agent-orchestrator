@@ -11,6 +11,7 @@ import type {
 import type { BrowserAnnotationCancelPayload, BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
 import { MAX_BROWSER_TABS } from "../../shared/browser-tabs";
 import { OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
+import { useHostCapability } from "./useHostCapability";
 
 export type { BrowserNavState };
 
@@ -215,7 +216,9 @@ export function useBrowserView({
 	const overlayOpenRef = useRef(false);
 	const tabNoticeTimerRef = useRef<number | null>(null);
 	const tabsStateRef = useRef(tabsState);
-	const hasNativeBrowser = Boolean(window.ao?.browser);
+	// See BrowserPanel: the presence of the method was never the question, and
+	// against a remote daemon the answer is no even though the method is there.
+	const hasNativeBrowser = useHostCapability("browserPanel").available;
 
 	useEffect(() => {
 		activeRef.current = active;

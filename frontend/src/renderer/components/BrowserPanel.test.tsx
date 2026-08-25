@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BrowserPanel, BrowserPanelView, useBrowserAnnotationQueue } from "./BrowserPanel";
 import { useBrowserView, type BrowserNavState } from "../hooks/useBrowserView";
 import { OPEN_BROWSER_OVERLAY_SELECTOR } from "../lib/dom-selectors";
+import { setLocalServerTarget, setRemoteServerTarget } from "../lib/server-target";
 import { MAX_BROWSER_TABS } from "../../shared/browser-tabs";
 import type { WorkspaceSession } from "../types/workspace";
 import type {
@@ -85,6 +86,26 @@ vi.mock("../hooks/useBrowserView", () => ({
 		};
 	},
 }));
+
+/**
+ * Run a case with the embedded browser view unavailable.
+ *
+ * The panel used to decide this by probing `window.ao?.browser`, so tests took
+ * the preload away to reach the static fallback. It now asks for the
+ * `browserPanel` host capability, and the server target is one of the two
+ * things that answer: a view composited into this window can only show a
+ * process on this computer, so pointing at a daemon elsewhere withdraws it even
+ * though the preload is still right there. That is the same fallback, reached
+ * the way the product reaches it.
+ */
+function withoutBrowserPanel(run: () => void) {
+	setRemoteServerTarget({ baseUrl: "https://build-box:7420", label: "build-box", credential: "pw" });
+	try {
+		run();
+	} finally {
+		setLocalServerTarget("http://127.0.0.1:3001");
+	}
+}
 
 const session: WorkspaceSession = {
 	id: "sess-1",
@@ -345,16 +366,12 @@ describe("BrowserPanel", () => {
 
 	it("uses the active app theme for the static browser preview", () => {
 		hookState.navState = { ...hookState.navState, url: "http://localhost:5173/" };
-		const ao = window.ao;
-		Object.defineProperty(window, "ao", { configurable: true, value: undefined });
-		try {
+		withoutBrowserPanel(() => {
 			render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
 			const preview = screen.getByText("Demo app preview").closest(".bg-preview, .bg-background");
 			expect(preview).toHaveClass("bg-background", "text-foreground");
-		} finally {
-			Object.defineProperty(window, "ao", { configurable: true, value: ao });
-		}
+		});
 	});
 
 	it("binds navigation controls to nav state", async () => {
@@ -1158,16 +1175,12 @@ describe("BrowserPanel", () => {
 		expect(screen.getByTestId("browser-viewport")).toHaveAttribute("data-placeholder", "true");
 	});
 
-	it("keeps an opaque background for the static preview fallback when there is no native browser bridge", () => {
+	it("keeps an opaque background for the static preview fallback when the browser panel is withdrawn", () => {
 		hookState.navState = { ...hookState.navState, url: "http://localhost:5173/" };
-		const ao = window.ao;
-		Object.defineProperty(window, "ao", { configurable: true, value: undefined });
-		try {
+		withoutBrowserPanel(() => {
 			render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 			expect(screen.getByTestId("browser-viewport")).toHaveAttribute("data-placeholder", "true");
-		} finally {
-			Object.defineProperty(window, "ao", { configurable: true, value: ao });
-		}
+		});
 	});
 
 	describe("pinned rail", () => {

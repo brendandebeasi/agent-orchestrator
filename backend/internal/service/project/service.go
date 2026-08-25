@@ -166,6 +166,18 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 	if err != nil {
 		return Project{}, err
 	}
+	// Ask whether the folder is there before asking whether it is a repository.
+	// Both checks used to be the same check: a path that does not exist is not a
+	// git repository either, so a typo came back as "AO needs a Git repository
+	// with an initial commit", which sends the reader off to run git init in a
+	// directory they do not have. That was survivable while every path arrived
+	// from a native folder picker, which cannot return one that is not there.
+	// A client typing a path for a daemon on another machine has no picker and
+	// no way to check, so the daemon is the only thing in the system that can
+	// tell the difference, and it has to say which one it found.
+	if err := ensureDirectoryPath(path); err != nil {
+		return Project{}, err
+	}
 	id := defaultProjectID(path)
 	if in.ProjectID != nil {
 		id = domain.ProjectID(strings.TrimSpace(*in.ProjectID))

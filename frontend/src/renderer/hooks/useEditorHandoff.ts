@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isEditorId, type EditorHandoffState, type OpenTargetId } from "../../shared/editor-handoff";
 import { aoBridge } from "../lib/bridge";
 import { captureRendererEvent } from "../lib/telemetry";
+import { useHostCapability } from "./useHostCapability";
 
 export const editorHandoffQueryKey = (sessionId: string) => ["editor-handoff", sessionId] as const;
 
@@ -18,9 +19,16 @@ export function editorHandoffErrorMessage(error: unknown): string | null {
 }
 
 export function useEditorHandoffState(sessionId: string) {
+	// Gated, not merely hidden: the browser stub throws for this method, and the
+	// desktop host would answer with editors installed on the wrong machine when
+	// the session lives on a remote daemon. Either way the right number of calls
+	// is zero, so the capability decides whether the query runs at all.
+	const editors = useHostCapability("editorHandoff");
+	const fileManager = useHostCapability("revealInFileManager");
+	const available = editors.available || fileManager.available;
 	return useQuery({
 		queryKey: editorHandoffQueryKey(sessionId),
-		enabled: Boolean(sessionId),
+		enabled: Boolean(sessionId) && available,
 		staleTime: 10_000,
 		retry: false,
 		queryFn: () => aoBridge.editorHandoff.getState(sessionId),

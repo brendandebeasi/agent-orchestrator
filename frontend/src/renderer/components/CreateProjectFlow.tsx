@@ -16,11 +16,14 @@ import {
 import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import type { ImportFolderScan } from "../../preload";
 import { aoBridge } from "../lib/bridge";
+import { useHostCapability } from "../hooks/useHostCapability";
 import { cn } from "../lib/utils";
 import type { ProjectKind } from "../types/workspace";
 import { CreateProjectAgentSheet, type CreateProjectAgentSelection } from "./CreateProjectAgentSheet";
 import type { CloneRepositoryDetails, CloneRepositorySelection } from "./CloneRepositoryDialog";
 import { Button } from "./ui/button";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
 
 export type CreateProjectInput = { path: string; asWorkspace?: boolean } & CreateProjectAgentSelection;
 export type CloneProjectInput = Pick<CloneRepositorySelection, "remoteUrl" | "destinationParent"> &
@@ -89,6 +92,16 @@ export function CreateProjectFlow({
 
 	const hasModePicker = mode === "choose";
 	const isBusy = isChoosingPath || isCreating || isInitializing;
+	// Everything this flow does before it calls the daemon assumes the folder is
+	// on this computer: a native dialog to pick it, a scan of its contents to
+	// preview what will be imported, an ancestor-repo check. None of that is
+	// reachable when the project lives on the daemon's machine, so where the
+	// picker is withdrawn the flow drops all three and asks for a path instead.
+	// That is a real loss of confirmation — the operator no longer sees the repos
+	// AO found before committing to the import — but the alternative is scanning
+	// this disk and reporting the results of the wrong computer.
+	const directoryPicker = useHostCapability("directoryPicker");
+	const canPickFolder = directoryPicker.available;
 
 	const selectSource = (source: ProjectSource) => {
 		const presetPath = pendingDropPath;
@@ -112,6 +125,13 @@ export function CreateProjectFlow({
 		setRepositorySetup(null);
 		setRepositorySetupWarning(null);
 		setSelectedKind(kind);
+		// No dialog to open, so open the step that asks for the path by hand. It
+		// is the same folder step either way; only the control inside it differs.
+		if (!canPickFolder && !presetPath) {
+			setModePickerOpen(false);
+			setFolderPickerOpen(true);
+			return;
+		}
 		setIsChoosingPath(true);
 		try {
 			const path =
@@ -119,7 +139,7 @@ export function CreateProjectFlow({
 				(await aoBridge.app.chooseDirectory(
 					kind === "workspace" ? t("createProject.chooseWorkspace") : t("createProject.chooseRepo"),
 				));
-			if (path && kind === "single_repo") {
+			if (path && kind === "single_repo" && canPickFolder) {
 				const preflight = await projectRepositoryPreflight(path);
 				if (preflight.blockingError) {
 					setError(preflight.blockingError);
@@ -131,7 +151,7 @@ export function CreateProjectFlow({
 				setRepositorySetup(preflight.setupCode);
 				setRepositorySetupWarning(preflight.setupWarning);
 			}
-			if (path && kind === "workspace") {
+			if (path && kind === "workspace" && canPickFolder) {
 				try {
 					const warning = await aoBridge.app.checkAncestorRepo(path);
 					if (warning) {
@@ -217,7 +237,7 @@ export function CreateProjectFlow({
 			}
 			setError(message);
 			if (hasModePicker && !cloneSelection) {
-				if (shouldScanCreateFailure(message)) {
+				if (canPickFolder && shouldScanCreateFailure(message)) {
 					try {
 						const scan = await aoBridge.app.scanImportFolder({
 							path: selectedPath,
@@ -315,11 +335,17 @@ export function CreateProjectFlow({
 						</Suspense>
 					) : null}
 					<CreateProjectFolderDialog
+						canPickFolder={canPickFolder}
 						disabled={isBusy}
 						error={error}
 						kind={selectedKind}
 						open={folderPickerOpen}
 						scan={validationScan}
+						serverLabel={directoryPicker.serverLabel}
+						onSubmitPath={(path) => {
+							setFolderPickerOpen(false);
+							void chooseDirectory(selectedKind, path);
+						}}
 						onBack={() => {
 							setError(null);
 							setValidationScan(null);
@@ -523,34 +549,46 @@ function CloneRepositoryDialogSkeleton() {
 }
 
 function CreateProjectFolderDialog({
+	canPickFolder,
 	disabled,
 	error,
 	kind,
 	onBack,
 	onChooseFolder,
 	onOpenChange,
+	onSubmitPath,
 	open,
 	scan,
+	serverLabel,
 }: {
+	canPickFolder: boolean;
 	disabled: boolean;
 	error: string | null;
 	kind: ProjectKind;
 	onBack: () => void;
 	onChooseFolder: () => void;
 	onOpenChange: (open: boolean) => void;
+	onSubmitPath: (path: string) => void;
 	open: boolean;
 	scan: ImportFolderScan | null;
+	serverLabel: string;
 }) {
 	const { t } = useTranslation();
 	const isWorkspace = kind === "workspace";
 	const failedRepos = scan?.repos.filter((repo) => (repo.status === "error" || !repo.hasRemote) && !repo.needsGitInit) ?? [];
 	const hasScan = scan !== null;
+	// Held here rather than in the flow because the flow only ever wants the
+	// finished value: a half-typed path is not a selection, and threading every
+	// keystroke up would put it one state update away from being treated as one.
+	const [typedPath, setTypedPath] = useState("");
 	const footerMessage =
 		failedRepos.length > 0
 			? t("createProject.footerResolve", { count: failedRepos.length })
 			: hasScan
 				? t("createProject.footerReview")
-				: t("createProject.footerChoose");
+				: canPickFolder
+					? t("createProject.footerChoose")
+					: t("createProject.footerEnterPath");
 	return (
 		<Dialog.Root open={open} onOpenChange={onOpenChange}>
 			<Dialog.Portal>
@@ -638,7 +676,7 @@ function CreateProjectFolderDialog({
 									</div>
 								)}
 							</div>
-						) : (
+						) : canPickFolder ? (
 							<button
 								type="button"
 								className="flex min-h-[132px] w-full flex-col items-center justify-center rounded-lg border border-dashed border-[var(--color-border-import-modal)] bg-[var(--color-bg-import-card)] p-6 text-center transition-colors hover:bg-[var(--color-bg-import-card-hover)] disabled:pointer-events-none disabled:opacity-50 sm:min-h-[160px]"
@@ -655,6 +693,59 @@ function CreateProjectFolderDialog({
 									{isWorkspace ? t("createProject.pickerWorkspaceHint") : t("createProject.pickerProjectHint")}
 								</span>
 							</button>
+						) : (
+							<form
+								className="space-y-2"
+								onSubmit={(event) => {
+									event.preventDefault();
+									const trimmed = typedPath.trim();
+									if (!trimmed || disabled) return;
+									onSubmitPath(trimmed);
+								}}
+							>
+								<Label
+									htmlFor="createProjectFolderPath"
+									className="text-[13px] font-semibold text-[var(--color-text-import-title)]"
+								>
+									{t("createProject.enterFolderPath", { server: serverLabel })}
+								</Label>
+								<div className="flex gap-2">
+									<div className="relative min-w-0 flex-1">
+										<span className="pointer-events-none absolute inset-y-0 left-3 flex w-4 items-center justify-center text-[var(--color-text-import-muted)]">
+											<Folder className="size-4" aria-hidden="true" />
+										</span>
+										<Input
+											id="createProjectFolderPath"
+											autoFocus
+											autoCapitalize="none"
+											autoComplete="off"
+											aria-describedby="createProjectFolderPathHint"
+											className="bg-[var(--color-bg-import-card)] pl-10 font-mono text-[13px]"
+											disabled={disabled}
+											placeholder={t("createProject.enterFolderPathPlaceholder")}
+											spellCheck={false}
+											value={typedPath}
+											onChange={(event) => setTypedPath(event.target.value)}
+										/>
+									</div>
+									<Button
+										type="submit"
+										variant="footer"
+										className="h-control-form! px-4"
+										disabled={disabled || typedPath.trim() === ""}
+									>
+										{t("createProject.useThisFolder")}
+									</Button>
+								</div>
+								<p
+									id="createProjectFolderPathHint"
+									className="text-pretty text-[12px] leading-5 text-[var(--color-text-import-muted)]"
+								>
+									{isWorkspace
+										? t("createProject.enterFolderPathWorkspaceHint")
+										: t("createProject.enterFolderPathProjectHint")}
+								</p>
+							</form>
 						)}
 						{error && !hasScan && (
 							<div

@@ -4,6 +4,7 @@ import {
 	clearServerCredential,
 	getServerCredential,
 	getServerTarget,
+	serverIsLocal,
 	setLocalServerTarget,
 	setRemoteServerTarget,
 	subscribeServerTarget,
@@ -17,7 +18,7 @@ describe("server target", () => {
 	it("starts untrusted, with no server and no credential", () => {
 		setLocalServerTarget(null);
 
-		expect(getServerTarget()).toEqual({ baseUrl: null, label: LOCAL_SERVER_LABEL, requiresAuth: false });
+		expect(getServerTarget()).toEqual({ baseUrl: null, kind: "local", label: LOCAL_SERVER_LABEL, requiresAuth: false });
 		expect(getServerCredential()).toBeNull();
 	});
 
@@ -30,7 +31,7 @@ describe("server target", () => {
 	it("carries a label and a credential for a remote target", () => {
 		setRemoteServerTarget({ baseUrl: "http://desk.local:3001/", label: "Desk", credential: "hunter2" });
 
-		expect(getServerTarget()).toEqual({ baseUrl: "http://desk.local:3001", label: "Desk", requiresAuth: true });
+		expect(getServerTarget()).toEqual({ baseUrl: "http://desk.local:3001", kind: "remote", label: "Desk", requiresAuth: true });
 		expect(getServerCredential()).toBe("hunter2");
 	});
 
@@ -78,10 +79,26 @@ describe("server target", () => {
 		clearServerCredential();
 
 		expect(getServerCredential()).toBeNull();
-		expect(getServerTarget()).toEqual({ baseUrl: "http://desk.local:3001", label: "Desk", requiresAuth: true });
+		expect(getServerTarget()).toEqual({ baseUrl: "http://desk.local:3001", kind: "remote", label: "Desk", requiresAuth: true });
 		expect(listener).toHaveBeenCalledTimes(1);
 
 		clearServerCredential();
 		expect(listener).toHaveBeenCalledTimes(1);
+	});
+
+	it("reports where the server's filesystem is, which is not the same question as how it authenticates", () => {
+		setLocalServerTarget("http://127.0.0.1:3001");
+		expect(serverIsLocal()).toBe(true);
+
+		setRemoteServerTarget({ baseUrl: "http://desk.local:3001", label: "Desk", credential: "hunter2" });
+		expect(serverIsLocal()).toBe(false);
+
+		// Losing the credential does not bring the files back to this disk. The
+		// capability gate reads `kind` rather than anything about authentication
+		// for exactly that reason: one describes how the server checks who is
+		// asking, the other where its filesystem is.
+		clearServerCredential();
+		expect(getServerCredential()).toBeNull();
+		expect(serverIsLocal()).toBe(false);
 	});
 });

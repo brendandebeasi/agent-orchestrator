@@ -3,6 +3,8 @@ import { ChevronLeft, Folder, GitBranch, Link2, X } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { aoBridge } from "../lib/bridge";
+import { useHostCapability } from "../hooks/useHostCapability";
+import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
@@ -41,6 +43,14 @@ export default function CloneRepositoryDialog({
 	const [submitted, setSubmitted] = useState(false);
 	const [choosingDestination, setChoosingDestination] = useState(false);
 	const [destinationPickerError, setDestinationPickerError] = useState<string | null>(null);
+	// The destination is a folder on whichever machine runs the daemon, and the
+	// native dialog can only show folders on this one. Where it is unavailable
+	// the same field becomes typeable instead of read-only: the operator names
+	// the path, and the daemon — the only party that can see that disk — is what
+	// says whether it is there when the clone is submitted.
+	const destinationPicker = useHostCapability("directoryPicker");
+	const canPickDestination = destinationPicker.available;
+	const destinationServerLabel = destinationPicker.serverLabel;
 	const repositoryName = repositoryNameFromGitUrl(value.remoteUrl);
 	const targetPath = repositoryName && value.destinationParent
 		? joinCloneDestination(value.destinationParent, repositoryName)
@@ -167,29 +177,60 @@ export default function CloneRepositoryDialog({
 										</span>
 										<Input
 											id="cloneDestination"
-											aria-describedby={destinationError ? "cloneDestinationError" : undefined}
+											aria-describedby={
+												destinationError
+													? "cloneDestinationError"
+													: canPickDestination
+														? undefined
+														: "cloneDestinationHelp"
+											}
 											aria-invalid={destinationError ? true : undefined}
-											className="cursor-default bg-[var(--color-bg-import-card)] pl-10 font-mono text-[13px]"
-											placeholder={t("createProject.cloneDestinationPlaceholder")}
-											readOnly
+											autoCapitalize="none"
+											autoComplete="off"
+											className={cn(
+												"bg-[var(--color-bg-import-card)] pl-10 font-mono text-[13px]",
+												canPickDestination && "cursor-default",
+											)}
+											disabled={disabled}
+											placeholder={
+												canPickDestination
+													? t("createProject.cloneDestinationPlaceholder")
+													: t("createProject.cloneDestinationRemotePlaceholder")
+											}
+											readOnly={canPickDestination}
+											spellCheck={false}
 											value={value.destinationParent}
+											onChange={
+												canPickDestination
+													? undefined
+													: (event) => onChange({ ...value, destinationParent: event.target.value })
+											}
 										/>
 									</div>
-									<Button
-										type="button"
-										variant="footer"
-										className="h-control-form! px-4"
-										disabled={disabled || choosingDestination}
-										onClick={() => void chooseDestination()}
-									>
-										{choosingDestination ? t("createProject.opening") : t("createProject.cloneChoose")}
-									</Button>
+									{canPickDestination ? (
+										<Button
+											type="button"
+											variant="footer"
+											className="h-control-form! px-4"
+											disabled={disabled || choosingDestination}
+											onClick={() => void chooseDestination()}
+										>
+											{choosingDestination ? t("createProject.opening") : t("createProject.cloneChoose")}
+										</Button>
+									) : null}
 								</div>
 								{destinationError ? (
 									<p id="cloneDestinationError" className="text-pretty text-[12px] leading-5 text-destructive" role="alert">
 										{destinationError}
 									</p>
-								) : null}
+								) : canPickDestination ? null : (
+									<p
+										id="cloneDestinationHelp"
+										className="text-pretty text-[12px] leading-5 text-[var(--color-text-import-muted)]"
+									>
+										{t("createProject.cloneDestinationRemoteHelp", { server: destinationServerLabel })}
+									</p>
+								)}
 							</div>
 
 							{targetPath ? (

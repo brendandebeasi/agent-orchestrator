@@ -1012,6 +1012,19 @@ func TestManager_AddValidationAndConflicts(t *testing.T) {
 	_, err = m.Add(ctx, project.AddInput{Path: t.TempDir()}) // exists but not a git repo
 	wantCode(t, err, "NOT_A_GIT_REPO")
 
+	// A path that is not there at all is a different answer from a path that is
+	// there and holds no repository, and a client with no filesystem of its own
+	// to check against has only this error to tell them apart.
+	_, err = m.Add(ctx, project.AddInput{Path: filepath.Join(t.TempDir(), "no-such-folder")})
+	wantCode(t, err, "INVALID_PATH")
+
+	notAFolder := filepath.Join(t.TempDir(), "file.txt")
+	if err := os.WriteFile(notAFolder, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err = m.Add(ctx, project.AddInput{Path: notAFolder})
+	wantCode(t, err, "INVALID_PATH")
+
 	configureCommitter(t)
 	parent := filepath.Join(t.TempDir(), "parent")
 	gitRepoWithCommitNoOrigin(t, parent)

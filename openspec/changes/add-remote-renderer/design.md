@@ -219,11 +219,48 @@ client.
 ### D9. Capabilities are declared by the bridge, gated by one hook
 
 `aoBridge` gains `capabilities: { editorHandoff, revealInFileManager, directoryPicker,
-browserPanel, ... }`. The Electron preload reports all true; the browser fallback stub
-reports all false; Electron in remote mode reports the host-bound ones false. One
-`useHostCapability(name)` hook is the only permitted read, so gating cannot drift per call
-site, and every existing call site that reaches through `aoBridge` for one of these is
-converted.
+browserPanel }`, typed in `frontend/src/shared/host-capabilities.ts` so the preload and the
+stub cannot drift apart. The Electron preload reports all true; the browser fallback stub
+reports all false. One `useHostCapability(name)` hook is the only permitted read, so gating
+cannot drift per call site, and every existing call site that reaches through `aoBridge`
+for one of these is converted.
+
+**The declaration is necessary but not sufficient.** A capability is available only when
+the host declares it *and* the server target is local. The preload's answer is fixed for
+the life of the window, and remote mode is a startup setting (D10), but the operator can
+connect somewhere else long after startup through the connection screen. Every one of
+these features reaches for something on a disk and takes for granted that the disk is this
+one; point a desktop client at a daemon on another machine and that stops being true while
+every declared capability stays declared. So the hook folds `ServerTarget.kind` in, and the
+UI withdraws these features on connect without a reload.
+
+`ServerTarget.kind` is deliberately separate from `requiresAuth`. One says how the server
+checks who is asking, the other says where its filesystem is. Today `requiresAuth` predicts
+`kind` — the loopback daemon asks for nothing and remote ones do — but it does not mean it,
+and a daemon on the network that authenticates nothing is still on another disk.
+
+A withdrawn capability is not an error. It does not go through `TopbarActionError` or any
+other failure channel; the reason rides on the disabled control's tooltip, or the control
+is simply absent. Nothing failed — the operator asked a computer to open a file that is on
+a different computer, and the honest response is to not offer it.
+
+The stub behind a false capability throws rather than resolving to a plausible nothing.
+Returning `null` or an empty scan is what let these methods be called from a browser for as
+long as they were: the caller got something shaped right back, drew a blank, and no one
+found out the feature had quietly stopped existing. Two members stay non-throwing, both
+because of *when* the renderer reaches them — a value read to choose a render path
+(`browser.nativeCompositionEnabled`) has to yield a value, and the `browser.on*`
+subscriptions are registered unconditionally in mount effects, where throwing would take
+out the panel to prevent nothing.
+
+**What the remote path gives up.** Withdrawing `directoryPicker` also withdraws the local
+folder scan and the ancestor-repo check, because both read this machine's disk. The import
+flow loses its pre-import preview of what it found, and the daemon becomes the only thing
+that validates the path. That is the right trade: a scan of the wrong computer is worse
+than no scan, since it would confirm a repository that the daemon will never see. It does
+mean the daemon's own errors are now the whole story on that path, which is why
+`project.Manager.Add` had to stop answering `NOT_A_GIT_REPO` for a folder that simply is
+not there.
 
 ### D10. Electron remote mode is a lifecycle branch, not a fork of `main.ts`
 

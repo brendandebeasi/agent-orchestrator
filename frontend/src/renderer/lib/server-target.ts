@@ -16,6 +16,16 @@
 /** A daemon this client can talk to. */
 export type ServerTarget = {
 	/**
+	 * Whether the daemon runs on the machine this client runs on.
+	 *
+	 * Separate from `requiresAuth`, which the location currently predicts but
+	 * does not mean: one describes how the server authenticates, the other
+	 * describes where its filesystem is. Anything that reaches for something on
+	 * this computer on the server's behalf — an editor, a file manager, a
+	 * directory picker — is asking this question and not that one.
+	 */
+	kind: "local" | "remote";
+	/**
 	 * Origin the client sends requests to, without a trailing slash. `null`
 	 * means no server is trusted yet — before the local daemon reports a port,
 	 * or before the operator has connected to a remote one. Requests made while
@@ -50,6 +60,7 @@ function normalizeBaseUrl(raw: string | null | undefined): string | null {
 }
 
 let target: ServerTarget = {
+	kind: "local",
 	baseUrl: normalizeBaseUrl(explicitBaseUrl ?? null),
 	label: LOCAL_SERVER_LABEL,
 	requiresAuth: false,
@@ -108,15 +119,28 @@ export function serverAuthHeaders(): Record<string, string> {
  * path: it reports a port when the daemon is up and null when it is not.
  */
 export function setLocalServerTarget(baseUrl: string | null): void {
-	setServerTarget({ baseUrl: normalizeBaseUrl(baseUrl), label: LOCAL_SERVER_LABEL, requiresAuth: false }, null);
+	setServerTarget(
+		{ kind: "local", baseUrl: normalizeBaseUrl(baseUrl), label: LOCAL_SERVER_LABEL, requiresAuth: false },
+		null,
+	);
 }
 
 /** Point the client at a daemon reached over the network. */
 export function setRemoteServerTarget(next: { baseUrl: string; label: string; credential: string }): void {
 	setServerTarget(
-		{ baseUrl: normalizeBaseUrl(next.baseUrl), label: next.label, requiresAuth: true },
+		{ kind: "remote", baseUrl: normalizeBaseUrl(next.baseUrl), label: next.label, requiresAuth: true },
 		next.credential,
 	);
+}
+
+/**
+ * Whether the current server shares a filesystem with this client. Read by the
+ * capability gate: a browser client served by the daemon it talks to is still
+ * remote in the sense that matters here, because the machine running the
+ * renderer is not the machine holding the worktree.
+ */
+export function serverIsLocal(): boolean {
+	return target.kind === "local";
 }
 
 /**
@@ -133,6 +157,7 @@ export function clearServerCredential(): void {
 
 function setServerTarget(next: ServerTarget, nextCredential: string | null): void {
 	const unchanged =
+		next.kind === target.kind &&
 		next.baseUrl === target.baseUrl &&
 		next.label === target.label &&
 		next.requiresAuth === target.requiresAuth &&

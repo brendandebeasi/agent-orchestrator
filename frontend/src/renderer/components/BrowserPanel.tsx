@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { useBrowserView, type BrowserViewModel } from "../hooks/useBrowserView";
+import { useHostCapability } from "../hooks/useHostCapability";
 import { formatBrowserAnnotationMessage, type BrowserAnnotationSubmitPayload } from "../../shared/browser-annotations";
 import { MAX_BROWSER_TABS } from "../../shared/browser-tabs";
 import type { WorkspaceSession } from "../types/workspace";
@@ -313,9 +314,16 @@ export function BrowserPanelView({
 	const [urlInput, setUrlInput] = useState(navState.url);
 	const { beginPicking, cancelPicking, enqueue, error, failPicking, queuedCount, retryQueued, status } =
 		annotationQueue;
-	const hasNativeBrowser = Boolean(window.ao?.browser);
+	// Was `Boolean(window.ao?.browser)`, which asked whether the method existed.
+	// The method existing is not the question: the native view is composited by
+	// this machine's Electron over a page the daemon's browser runtime drives,
+	// and the runtime's address is read from the run file on the daemon's
+	// machine. Against a remote daemon the method is still there and there is
+	// still nothing here to composite, so the panel falls back to the static
+	// preview exactly as it does in a browser tab.
+	const hasNativeBrowser = useHostCapability("browserPanel").available;
 	const showStaticPreview = !hasNativeBrowser && navState.url !== "";
-	const canAnnotate = Boolean(window.ao?.browser && viewId && navState.url);
+	const canAnnotate = Boolean(hasNativeBrowser && viewId && navState.url);
 	const canRetryAnnotation = status === "error" && queuedCount > 0;
 	const canOpenTab = tabs.length < MAX_BROWSER_TABS;
 	const [devicePreset, setDevicePreset] = useState<string | null>(null);

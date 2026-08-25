@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import * as jestDomMatchers from "@testing-library/jest-dom/matchers";
 import { expect } from "vitest";
 import "../i18n";
+import { ALL_HOST_CAPABILITIES } from "../../shared/host-capabilities";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
 
 // Vitest 4 can load the convenience entry against a different matcher
@@ -97,6 +98,10 @@ if (typeof window !== "undefined") {
 	Element.prototype.scrollIntoView = (() => undefined) as typeof Element.prototype.scrollIntoView;
 
 	window.ao = {
+		// Unit tests run against a full desktop host unless a case says otherwise,
+		// so the default is every capability on. A case testing a withdrawn
+		// feature overrides this entry rather than deleting the bridge.
+		capabilities: { ...ALL_HOST_CAPABILITIES },
 		app: {
 			getVersion: async () => "0.0.0-test",
 			chooseDirectory: async () => null,

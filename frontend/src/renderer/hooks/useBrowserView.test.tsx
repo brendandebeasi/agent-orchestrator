@@ -7,6 +7,7 @@ import {
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setLocalServerTarget, setRemoteServerTarget } from "../lib/server-target";
 
 type Listener = (state: BrowserNavState) => void;
 type TabsListener = (state: import("../../main/browser-view-host").BrowserTabsState) => void;
@@ -1128,8 +1129,12 @@ describe("useBrowserView", () => {
 	it("re-applies the preview on remount without a native browser, whose view state does not survive", async () => {
 		// In web/mock mode navState is component-local, so remounting with an
 		// already-consumed trigger must still restore the static preview.
-		const original = window.ao;
-		window.ao = undefined;
+		//
+		// The hook asks for the `browserPanel` capability rather than probing for
+		// a preload, and a remote server withdraws it: a view composited into this
+		// window could only show a process on this computer. So this is the mock
+		// path, reached the way a real client reaches it.
+		setRemoteServerTarget({ baseUrl: "https://build-box:7420", label: "build-box", credential: "pw" });
 		try {
 			const props = {
 				sessionId: "sess-1",
@@ -1146,7 +1151,7 @@ describe("useBrowserView", () => {
 			await waitFor(() => expect(second.result.current.navState.url).toBe("http://localhost:5217/"));
 			second.unmount();
 		} finally {
-			window.ao = original;
+			setLocalServerTarget("http://127.0.0.1:3001");
 		}
 	});
 

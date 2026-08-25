@@ -1,4 +1,5 @@
 import type { AoBridge } from "../../preload";
+import { NO_HOST_CAPABILITIES } from "../../shared/host-capabilities";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
 import { isPreviewMode } from "./preview-mode";
 export type { FeatureBuild } from "../../main/feature-builds";
@@ -13,17 +14,42 @@ export type { FeatureBuild } from "../../main/feature-builds";
  */
 export const hasElectronHost = typeof window !== "undefined" && Boolean(window.ao);
 
+/**
+ * The stub's answer for anything that needs a host and has none.
+ *
+ * Returning a plausible nothing — `null`, an empty scan, an idle nav state — is
+ * what let these methods be called from a browser for as long as they were: the
+ * caller got something shaped right back, drew a blank result, and no one found
+ * out that the feature had quietly stopped existing. Every one of these now has
+ * a capability guarding its call site, so arriving here is not a browser doing
+ * something reasonable, it is a guard that is missing. Say so where it happens
+ * rather than three screens later.
+ */
+function unavailable(method: string): never {
+	throw new Error(
+		`${method} needs the desktop app on the same computer as the daemon. This is a bug: its call site should have checked the host capability first.`,
+	);
+}
+
 export const aoBridge: AoBridge =
 	window.ao ??
 	({
+		// A browser tab has no editor to launch, no file manager to reveal into,
+		// no native directory dialog, and no embedded browser view. Reporting
+		// them off is what lets the rest of this stub stop pretending: the
+		// methods behind these throw (see below) rather than resolving to a
+		// plausible-looking nothing, because every one of their call sites is
+		// gated on the capability and reaching one anyway is a gating bug worth
+		// hearing about.
+		capabilities: { ...NO_HOST_CAPABILITIES },
 		app: {
 			getVersion: async () => "0.0.0-preview",
-			chooseDirectory: async () => null,
+			chooseDirectory: async () => unavailable("app.chooseDirectory"),
 			openExternal: async (url: string) => {
 				window.open(url, "_blank", "noopener,noreferrer");
 			},
-			scanImportFolder: async ({ path }) => ({ path, repos: [] }),
-			checkAncestorRepo: async () => undefined,
+			scanImportFolder: async () => unavailable("app.scanImportFolder"),
+			checkAncestorRepo: async () => unavailable("app.checkAncestorRepo"),
 			getPathForFile: () => "",
 			onOpenFolderPath: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
@@ -84,90 +110,38 @@ export const aoBridge: AoBridge =
 			onStatus: () => () => undefined,
 		},
 		editorHandoff: {
-			getState: async () => ({
-				targets: [],
-				preferredEditorId: "cursor",
-				workspaceAvailable: false,
-				unavailableReason: "Desktop app is required to open a workspace.",
-			}),
-			open: async () => {
-				throw new Error("Desktop app is required to open a workspace.");
-			},
+			getState: async () => unavailable("editorHandoff.getState"),
+			open: async () => unavailable("editorHandoff.open"),
 		},
 		telemetry: {
 			getBootstrap: async () => null,
 		},
 		browser: {
+			// Reported off rather than stubbed off: the panel reads this to decide
+			// whether to composite a native view or draw a static preview, and it
+			// has to get an answer, not an exception, to make that choice.
 			nativeCompositionEnabled: false,
-			ensure: async (sessionId: string) => ({
-				viewId: `preview:${sessionId}`,
-				url: "",
-				title: "",
-				canGoBack: false,
-				canGoForward: false,
-				isLoading: false,
-			}),
-			setBounds: () => undefined,
-			setOverlayOpen: () => undefined,
-			navigate: async ({ viewId, url }) => ({
-				viewId,
-				url,
-				title: "",
-				canGoBack: false,
-				canGoForward: false,
-				isLoading: false,
-			}),
-			clear: async (viewId: string) => ({
-				viewId,
-				url: "",
-				title: "",
-				canGoBack: false,
-				canGoForward: false,
-				isLoading: false,
-			}),
-			goBack: async (viewId: string) => ({
-				viewId,
-				url: "",
-				title: "",
-				canGoBack: false,
-				canGoForward: false,
-				isLoading: false,
-			}),
-			goForward: async (viewId: string) => ({
-				viewId,
-				url: "",
-				title: "",
-				canGoBack: false,
-				canGoForward: false,
-				isLoading: false,
-			}),
-			reload: async (viewId: string) => ({
-				viewId,
-				url: "",
-				title: "",
-				canGoBack: false,
-				canGoForward: false,
-				isLoading: false,
-			}),
-			stop: async (viewId: string) => ({
-				viewId,
-				url: "",
-				title: "",
-				canGoBack: false,
-				canGoForward: false,
-				isLoading: false,
-			}),
-			getTabs: async (viewId: string) => ({ viewId, activeTabId: "t1", tabs: [] }),
-			selectTab: async ({ viewId, tabId }) => ({ viewId, activeTabId: tabId, tabs: [] }),
-			closeTab: async ({ viewId }) => ({ viewId, activeTabId: "", tabs: [] }),
-			openTab: async ({ viewId }) => ({ viewId, activeTabId: "", tabs: [] }),
-			devtools: async ({ viewId, operation }) => ({
-				viewId,
-				open: operation !== "close",
-				activeTabId: "",
-			}),
-			destroy: () => undefined,
-			setAnnotationMode: async () => undefined,
+			ensure: async () => unavailable("browser.ensure"),
+			setBounds: () => unavailable("browser.setBounds"),
+			setOverlayOpen: () => unavailable("browser.setOverlayOpen"),
+			navigate: async () => unavailable("browser.navigate"),
+			clear: async () => unavailable("browser.clear"),
+			goBack: async () => unavailable("browser.goBack"),
+			goForward: async () => unavailable("browser.goForward"),
+			reload: async () => unavailable("browser.reload"),
+			stop: async () => unavailable("browser.stop"),
+			getTabs: async () => unavailable("browser.getTabs"),
+			selectTab: async () => unavailable("browser.selectTab"),
+			closeTab: async () => unavailable("browser.closeTab"),
+			openTab: async () => unavailable("browser.openTab"),
+			devtools: async () => unavailable("browser.devtools"),
+			destroy: () => unavailable("browser.destroy"),
+			setAnnotationMode: async () => unavailable("browser.setAnnotationMode"),
+			// Subscriptions stay harmless no-ops. A listener that is never called
+			// costs nothing and unsubscribes cleanly, and every one of these is
+			// registered unconditionally in an effect that runs before the panel
+			// knows whether it will ever have a view — throwing here would take out
+			// the component on mount to prevent nothing.
 			onNavState: () => () => undefined,
 			onTabsState: () => () => undefined,
 			onAgentActivity: () => () => undefined,

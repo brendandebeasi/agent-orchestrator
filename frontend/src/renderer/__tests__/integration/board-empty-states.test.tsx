@@ -3,6 +3,7 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
+import { ALL_HOST_CAPABILITIES } from "../../../shared/host-capabilities";
 
 // Drives the real useWorkspaceQuery + SessionsBoard end to end for the two
 // first-run states, mocking only the HTTP client, the router, and the native
@@ -28,7 +29,9 @@ vi.mock("../../lib/api-client", () => ({
 }));
 
 vi.mock("../../lib/bridge", () => ({
-	aoBridge: { app: { chooseDirectory: chooseDirectoryMock } },
+	// These cases are all about the native-picker path, so the double declares
+	// the desktop host that has one.
+	aoBridge: { capabilities: { ...ALL_HOST_CAPABILITIES }, app: { chooseDirectory: chooseDirectoryMock } },
 }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {

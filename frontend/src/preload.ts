@@ -16,6 +16,7 @@ import {
 	type TrayOpenSessionTarget,
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
+import { ALL_HOST_CAPABILITIES, type HostCapabilities } from "./shared/host-capabilities";
 import type {
 	EditorHandoffState,
 	OpenSessionTargetInput,
@@ -101,6 +102,18 @@ ipcRenderer.on("app:openFolderPath", (_event, path: string) => {
 });
 
 const api = {
+	/**
+	 * What this host can do for the renderer beyond talking to the daemon.
+	 *
+	 * A preload means Electron, and Electron means every one of these is wired
+	 * to something real, so they are all declared true here. That is a statement
+	 * about the host and not about whether using them would be correct: pointing
+	 * this client at a daemon on another machine leaves the editor and the file
+	 * manager working perfectly on paths that are not on this disk. The renderer
+	 * folds in where the server is (see `useHostCapability`), and remote mode
+	 * withdraws the ones the setting itself rules out.
+	 */
+	capabilities: ALL_HOST_CAPABILITIES as HostCapabilities,
 	app: {
 		getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
 		chooseDirectory: (title?: string) => ipcRenderer.invoke("app:chooseDirectory", title) as Promise<string | null>,

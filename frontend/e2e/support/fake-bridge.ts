@@ -69,6 +69,17 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// resolves — an incomplete object would throw the moment the app touched
 			// a missing method.
 			const ao = {
+				// These fakes stand in for a desktop host, so every host-bound
+				// feature is declared available. Inlined rather than imported from
+				// shared/host-capabilities because this object is built inside an
+				// init script that runs in the page, where module imports are not
+				// available.
+				capabilities: {
+					editorHandoff: true,
+					revealInFileManager: true,
+					directoryPicker: true,
+					browserPanel: true,
+				},
 				app: {
 					getVersion: async () => version,
 					chooseDirectory: async () => null,
@@ -516,6 +527,17 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				...(error ? { error } : {}),
 			});
 			const ao = {
+				// These fakes stand in for a desktop host, so every host-bound
+				// feature is declared available. Inlined rather than imported from
+				// shared/host-capabilities because this object is built inside an
+				// init script that runs in the page, where module imports are not
+				// available.
+				capabilities: {
+					editorHandoff: true,
+					revealInFileManager: true,
+					directoryPicker: true,
+					browserPanel: true,
+				},
 				app: {
 					getVersion: async () => version,
 					chooseDirectory: async () => null,
