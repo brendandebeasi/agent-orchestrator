@@ -41,6 +41,57 @@ func TestHealthProbes(t *testing.T) {
 	}
 }
 
+// A remote client reads the daemon's app version from the probe to tell the
+// operator when the two sides were built from different releases. It is absent
+// when the daemon runs without a supervising app, which the client has to read
+// as "cannot tell" rather than as a mismatch — so absence must be a missing
+// field, not an empty string that looks like a version it could compare.
+func TestHealthProbesReportAppVersion(t *testing.T) {
+	client := &http.Client{Timeout: 2 * time.Second}
+
+	t.Run("reports the launching app version", func(t *testing.T) {
+		cfg := config.Config{}
+		cfg.Telemetry.AppVersion = "1.4.2"
+		srv := httptest.NewServer(newTestRouter(cfg, discardLogger(), nil))
+		defer srv.Close()
+
+		for _, path := range []string{"/healthz", "/readyz"} {
+			resp, err := client.Get(srv.URL + path)
+			if err != nil {
+				t.Fatalf("GET %s: %v", path, err)
+			}
+			defer resp.Body.Close()
+			var body struct {
+				AppVersion string `json:"appVersion"`
+			}
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("decode %s: %v", path, err)
+			}
+			if body.AppVersion != "1.4.2" {
+				t.Errorf("GET %s appVersion = %q, want 1.4.2", path, body.AppVersion)
+			}
+		}
+	})
+
+	t.Run("omits the field when no app launched the daemon", func(t *testing.T) {
+		srv := httptest.NewServer(newTestRouter(config.Config{}, discardLogger(), nil))
+		defer srv.Close()
+
+		resp, err := client.Get(srv.URL + "/healthz")
+		if err != nil {
+			t.Fatalf("GET /healthz: %v", err)
+		}
+		defer resp.Body.Close()
+		var body map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode /healthz: %v", err)
+		}
+		if _, present := body["appVersion"]; present {
+			t.Errorf("appVersion present as %v; want the key absent", body["appVersion"])
+		}
+	})
+}
+
 func TestHealthProbesIncludeDaemonIdentity(t *testing.T) {
 	router := newTestRouter(config.Config{StartupWorkingDirectory: "/startup"}, discardLogger(), nil)
 	srv := httptest.NewServer(router)

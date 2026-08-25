@@ -332,6 +332,14 @@ func daemonProbePayload(status string, cfg config.Config) map[string]any {
 	if cfg.StartupWorkingDirectory != "" {
 		payload["startupWorkingDirectory"] = cfg.StartupWorkingDirectory
 	}
+	// The version of the desktop app that launched this daemon. A remote client
+	// reads it to tell the operator when it is talking to a server built from a
+	// different release. Absent when the daemon was started without a
+	// supervising app (a bare `ao daemon`), which is why a client must treat an
+	// unknown version as "cannot tell" rather than as a mismatch.
+	if cfg.Telemetry.AppVersion != "" {
+		payload["appVersion"] = cfg.Telemetry.AppVersion
+	}
 	// AO_APPIMAGE is set by the Electron app at spawn time when it runs from an
 	// AppImage. The value is the stable outer .AppImage file path, which the
 	// app's daemon identity check compares instead of the transient

@@ -165,11 +165,19 @@ func websocketAuthSubprotocol(r *http.Request) (protocol, token string) {
 // connectionToken returns the caller's connection token. It comes from the
 // Authorization: Bearer header (the mobile API client and a preview page's
 // top-level navigation); from a negotiated WebSocket subprotocol on a handshake
-// (a browser, which can set no headers there); or, ONLY on the preview-files
-// route, the auth cookie (a preview page's subresource requests — images/CSS/JS
-// — which the WebView issues without our header). Restricting the cookie to the
-// preview-files path means it can never authenticate any other mobile endpoint
-// even if a client sends it. The token is never read from the query string.
+// (a browser, which can set no headers there); or from one of two narrowly
+// scoped cookies, each honored on exactly one route family that a browser
+// fetches without any JavaScript of ours in the loop:
+//
+//   - ao_conn on the preview-files route — a preview page's subresource
+//     requests (images/CSS/JS), which the WebView issues without our header.
+//   - ao_web on GET/HEAD of the web-client assets — the browser's own requests
+//     for the client's script and style, issued before the client exists to
+//     attach a header.
+//
+// Restricting each cookie to its path means neither can authenticate any other
+// endpoint even if a client sends it everywhere. The token is never read from
+// the query string.
 func connectionToken(r *http.Request) string {
 	if t := bearerToken(r); t != "" {
 		return t
@@ -179,6 +187,11 @@ func connectionToken(r *http.Request) string {
 	}
 	if previewFilesCookiePath(r.URL.Path) != "" {
 		if c, err := r.Cookie(authCookieName); err == nil {
+			return c.Value
+		}
+	}
+	if remoteWebCookieHonored(r) {
+		if c, err := r.Cookie(remoteWebCookieName); err == nil {
 			return c.Value
 		}
 	}

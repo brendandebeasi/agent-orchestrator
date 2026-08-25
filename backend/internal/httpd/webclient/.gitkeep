@@ -1,0 +1,2 @@
+# The browser build of the renderer is written here by `npm run build:web` and
+# embedded by a `-tags webui` daemon build. Only this file is committed.

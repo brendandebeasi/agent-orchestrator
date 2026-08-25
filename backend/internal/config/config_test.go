@@ -367,3 +367,52 @@ func TestLoadGitLabInvalidHostTokens(t *testing.T) {
 		})
 	}
 }
+
+// Hosting a UI is a wider surface than serving the API, so it is off unless the
+// operator says otherwise — and a value that is neither on nor off is a
+// mistake worth failing the boot over rather than quietly reading as off.
+func TestLoadRemoteServeWebClient(t *testing.T) {
+	t.Run("off by default", func(t *testing.T) {
+		t.Setenv("AO_REMOTE_SERVE_WEB", "")
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		if cfg.RemoteAccess.ServeWebClient {
+			t.Fatal("ServeWebClient = true, want false with the variable unset")
+		}
+	})
+
+	for _, raw := range []string{"on", "true", "1", "yes", " ON "} {
+		t.Run("enabled by "+raw, func(t *testing.T) {
+			t.Setenv("AO_REMOTE_SERVE_WEB", raw)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if !cfg.RemoteAccess.ServeWebClient {
+				t.Fatalf("ServeWebClient = false for %q, want true", raw)
+			}
+		})
+	}
+
+	for _, raw := range []string{"off", "false", "0", "no"} {
+		t.Run("disabled by "+raw, func(t *testing.T) {
+			t.Setenv("AO_REMOTE_SERVE_WEB", raw)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.RemoteAccess.ServeWebClient {
+				t.Fatalf("ServeWebClient = true for %q, want false", raw)
+			}
+		})
+	}
+
+	t.Run("rejects an unrecognized value", func(t *testing.T) {
+		t.Setenv("AO_REMOTE_SERVE_WEB", "maybe")
+		if _, err := Load(); err == nil {
+			t.Fatal("Load: got nil error, want a failure for an unrecognized toggle")
+		}
+	})
+}

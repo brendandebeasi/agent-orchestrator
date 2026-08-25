@@ -213,6 +213,76 @@ func TestNoCookieSetOnNonPreviewRoutes(t *testing.T) {
 	}
 }
 
+// The web client's asset cookie is scoped the same way the preview cookie is:
+// honored on exactly one route family and inert everywhere else. A browser
+// attaches a cookie to a same-origin request whether or not the page chose to
+// send it, so a cookie that authenticated anything that acts would be a
+// cross-site request forgery waiting for an origin check to slip.
+func TestWebClientCookieScope(t *testing.T) {
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		wantStatus int
+	}{
+		{
+			name:       "authenticates the entry point",
+			method:     http.MethodGet,
+			path:       "/app/index.html",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "authenticates a HEAD of an asset",
+			method:     http.MethodHead,
+			path:       "/app/assets/app-a1b2.js",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "does not authenticate the API",
+			method:     http.MethodGet,
+			path:       "/api/v1/sessions",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "does not authenticate the terminal stream",
+			method:     http.MethodGet,
+			path:       "/mux",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			// The prefix is not enough on its own: a write under it is refused
+			// even though a read of the same path is allowed.
+			name:       "does not authenticate a write under the asset prefix",
+			method:     http.MethodPost,
+			path:       "/app/index.html",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			// A path that merely starts with the same characters is a
+			// different route, and the prefix check must not admit it.
+			name:       "does not authenticate a lookalike prefix",
+			method:     http.MethodGet,
+			path:       "/appliance/state",
+			wantStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, _ := newAuthUnderTest("secret12", time.Now)
+			r := httptest.NewRequest(tt.method, tt.path, nil)
+			r.RemoteAddr = "192.168.1.50:5555"
+			r.AddCookie(&http.Cookie{Name: remoteWebCookieName, Value: "secret12"})
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != tt.wantStatus {
+				t.Fatalf("%s %s with only the asset cookie: got %d want %d",
+					tt.method, tt.path, w.Code, tt.wantStatus)
+			}
+		})
+	}
+}
+
 // wsReq builds a WebSocket handshake for /mux offering the given subprotocols.
 func wsReq(subprotocols ...string) *http.Request {
 	r := httptest.NewRequest(http.MethodGet, "/mux", nil)

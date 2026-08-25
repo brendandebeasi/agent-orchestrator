@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
 // TestCORS exercises the allowlist boundary on a real router: trusted origins
@@ -183,5 +184,95 @@ func TestCORSPreflightHeaders(t *testing.T) {
 		if got := resp.Header.Get(header); got != want {
 			t.Errorf("%s = %q, want %q", header, got, want)
 		}
+	}
+}
+
+// TestCORSOnNetworkListener pins the origin rules on the network-facing socket,
+// where the loopback heuristic that is safe on loopback is not.
+//
+// On loopback, any loopback origin is trusted because such content can already
+// reach the no-auth daemon directly. A request that arrives over the network
+// came from another machine, whose localhost is not this one's, so the same
+// origin string proves nothing there. What is trusted instead is the daemon's
+// own origin — which only a page this daemon served can present.
+func TestCORSOnNetworkListener(t *testing.T) {
+	state := &authState{}
+	state.setHash(mobilebridge.HashPassword("secret12"))
+	cfg := config.Config{AllowedOrigins: []string{"app://renderer"}}
+	m := NewLANManager(newTestRouter(cfg, discardLogger(), nil), state, 0, discardLogger(), nil, remoteWebOptions{})
+
+	tests := []struct {
+		name       string
+		origin     string
+		wantStatus int
+		wantACAO   string
+	}{
+		{
+			// The web client the daemon serves, which is same-origin with it.
+			name:       "the daemon's own origin is allowed",
+			origin:     "http://192.168.1.10:3011",
+			wantStatus: http.StatusOK,
+			wantACAO:   "http://192.168.1.10:3011",
+		},
+		{
+			// Behind `tailscale serve` the browser's origin is https while the
+			// daemon sees plain HTTP, so both schemes count as its own.
+			name:       "the daemon's own origin over TLS is allowed",
+			origin:     "https://192.168.1.10:3011",
+			wantStatus: http.StatusOK,
+			wantACAO:   "https://192.168.1.10:3011",
+		},
+		{
+			name:       "the operator's allowlist still applies",
+			origin:     "app://renderer",
+			wantStatus: http.StatusOK,
+			wantACAO:   "app://renderer",
+		},
+		{
+			// The tightening: a remote caller's localhost is not this machine's.
+			name:       "a loopback origin is refused over the network",
+			origin:     "http://localhost:5181",
+			wantStatus: http.StatusForbidden,
+			wantACAO:   "",
+		},
+		{
+			name:       "a loopback IP origin is refused over the network",
+			origin:     "http://127.0.0.1:8080",
+			wantStatus: http.StatusForbidden,
+			wantACAO:   "",
+		},
+		{
+			name:       "an unlisted origin is refused",
+			origin:     "http://evil.example",
+			wantStatus: http.StatusForbidden,
+			wantACAO:   "",
+		},
+		{
+			// A different port on the same host is a different origin, and one
+			// this daemon did not serve.
+			name:       "a lookalike host with another port is refused",
+			origin:     "http://192.168.1.10:9999",
+			wantStatus: http.StatusForbidden,
+			wantACAO:   "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			r.RemoteAddr = "192.168.1.50:5555"
+			r.Host = "192.168.1.10:3011"
+			r.Header.Set("Origin", tt.origin)
+			r.Header.Set("Authorization", "Bearer secret12")
+			w := httptest.NewRecorder()
+			m.handler.ServeHTTP(w, r)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("status = %d, want %d", w.Code, tt.wantStatus)
+			}
+			if got := w.Header().Get("Access-Control-Allow-Origin"); got != tt.wantACAO {
+				t.Errorf("Access-Control-Allow-Origin = %q, want %q", got, tt.wantACAO)
+			}
+		})
 	}
 }

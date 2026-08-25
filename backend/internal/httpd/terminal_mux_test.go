@@ -122,7 +122,7 @@ func startAuthedMux(t *testing.T, mgr *terminal.Manager, password string) (wsURL
 	t.Helper()
 	state := &authState{}
 	state.setHash(mobilebridge.HashPassword(password))
-	m := NewLANManager(newTestRouter(config.Config{}, discardLogger(), mgr), state, 0, discardLogger(), nil)
+	m := NewLANManager(newTestRouter(config.Config{}, discardLogger(), mgr), state, 0, discardLogger(), nil, remoteWebOptions{})
 	port, err := m.Start(0)
 	if err != nil {
 		t.Fatalf("start LAN listener: %v", err)

@@ -44,7 +44,7 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 			// Cache keys must split on Origin even for rejected values, or a
 			// 403 could be replayed to an allowed origin.
 			w.Header().Add("Vary", "Origin")
-			if _, ok := allowed[origin]; !ok && !isLoopbackOrigin(origin) {
+			if !originPermitted(r, origin, allowed) {
 				envelope.WriteAPIError(w, r, http.StatusForbidden, "forbidden", "ORIGIN_FORBIDDEN",
 					"Origin is not allowed to access this daemon", nil)
 				return
@@ -71,6 +71,42 @@ func corsMiddleware(allowedOrigins []string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// originPermitted decides whether a cross-origin request may proceed. The
+// operator's explicit allowlist admits an origin on either listener; beyond it
+// the two listeners answer by different rules.
+//
+// On loopback, any loopback origin is admitted (see isLoopbackOrigin): such
+// content can already reach the no-auth loopback daemon directly, so refusing it
+// buys nothing.
+//
+// On the network listener that reasoning fails — a dev server on some other
+// machine's localhost bears a loopback origin too, and is not local to this
+// daemon at all — so the loopback heuristic is not applied there. What is
+// admitted instead is the daemon's own origin, which is what the web client the
+// daemon serves presents. That is not a widening of the allowlist: a page can
+// only bear this daemon's origin if it was served by this daemon. The Host
+// header it is compared against is client-supplied and therefore spoofable, but
+// a request that spoofs it still has to carry the connection password, and a
+// browser will not let a page forge its Origin.
+func originPermitted(r *http.Request, origin string, allowed map[string]struct{}) bool {
+	if _, ok := allowed[origin]; ok {
+		return true
+	}
+	if isNetworkListenerRequest(r) {
+		return isSelfOrigin(r, origin)
+	}
+	return isLoopbackOrigin(origin)
+}
+
+// isSelfOrigin reports whether origin names the address this request was sent
+// to, i.e. the request is same-origin with whatever this daemon served.
+func isSelfOrigin(r *http.Request, origin string) bool {
+	if r.Host == "" || origin == "" {
+		return false
+	}
+	return strings.EqualFold(origin, "http://"+r.Host) || strings.EqualFold(origin, "https://"+r.Host)
 }
 
 // isLoopbackOrigin reports whether a browser origin is content served from

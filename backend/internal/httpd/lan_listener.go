@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -32,10 +33,19 @@ type LANManager struct {
 // NewLANManager wraps handler in the LAN control-block and authMiddleware
 // (backed by the shared state) and returns a manager that can start/stop the
 // network-facing listener. Most callers want NewMobileLAN, which owns the state.
-func NewLANManager(handler http.Handler, state *authState, defaultPort int, log *slog.Logger, sink ports.EventSink) *LANManager {
+//
+// The wrapping order, outermost first:
+//
+//	markNetworkListener  → record the physical socket for downstream checks
+//	lanControlBlock      → 404 host-control routes before anything else runs
+//	remoteWebEntry       → the login page and the password exchange (pre-auth)
+//	authMiddleware       → every remaining route needs the connection password
+//	remoteWebAssets      → the web client bundle, authenticated like any route
+func NewLANManager(handler http.Handler, state *authState, defaultPort int, log *slog.Logger, sink ports.EventSink, web remoteWebOptions) *LANManager {
 	lock := newLockout(5, time.Minute, time.Now)
+	authed := authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))(remoteWebAssets(web)(handler))
 	return &LANManager{
-		handler:     markNetworkListener(lanControlBlock(authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))(handler))),
+		handler:     markNetworkListener(lanControlBlock(remoteWebEntry(state, lock, web)(authed))),
 		defaultPort: defaultPort,
 		log:         loggerOrDefault(log),
 		state:       state,
@@ -199,8 +209,15 @@ func IsLANControlBlockedPathForTest(method, path string) bool {
 // outside this package (the daemon) cannot construct an authState directly
 // since it is unexported; this gives them a LANManager that owns one, and the
 // daemon rotates the connection password exclusively via SetPasswordHash.
-func NewMobileLAN(handler http.Handler, defaultPort int, log *slog.Logger, sink ports.EventSink) *LANManager {
-	return NewLANManager(handler, &authState{}, defaultPort, log, sink)
+func NewMobileLAN(handler http.Handler, defaultPort int, log *slog.Logger, sink ports.EventSink, cfg config.Config) *LANManager {
+	web := remoteWebOptions{
+		ServeWebClient: cfg.RemoteAccess.ServeWebClient,
+		AppVersion:     cfg.Telemetry.AppVersion,
+	}
+	if assets, ok := webClientFS(); ok {
+		web.Assets = assets
+	}
+	return NewLANManager(handler, &authState{}, defaultPort, log, sink, web)
 }
 
 // SetPasswordHash stores the current connection password hash on the shared

@@ -142,6 +142,22 @@ type Config struct {
 	// GitLab carries the self-managed GitLab host allowlist and per-host
 	// token overrides, loaded once at boot from environment variables.
 	GitLab GitLabConfig
+	// RemoteAccess controls what the opt-in network listener serves beyond the
+	// API. It never affects the loopback listener.
+	RemoteAccess RemoteAccessConfig
+}
+
+// RemoteAccessConfig carries the network-listener-only options. It does not
+// decide whether the network listener runs at all — that stays with the
+// operator's Connect Mobile enable/disable — only what it serves once it does.
+type RemoteAccessConfig struct {
+	// ServeWebClient hosts the browser build of the renderer from the network
+	// listener so a remote client shares the daemon's origin. Off unless the
+	// operator sets AO_REMOTE_SERVE_WEB, and inert unless the binary was built
+	// with -tags webui: two independent opt-ins, because serving a UI is a
+	// larger surface than serving the API and neither the build nor the
+	// operator should be able to turn it on alone.
+	ServeWebClient bool
 }
 
 // Addr returns the host:port the HTTP server binds. It uses net.JoinHostPort so
@@ -172,6 +188,7 @@ func (c Config) Addr() string {
 //	AO_TELEMETRY_POSTHOG_HOST  PostHog host (default DefaultTelemetryPostHogHost)
 //	AO_GITLAB_ALLOWED_HOSTS    comma-separated self-managed GitLab hosts (each may include :port)
 //	AO_GITLAB_HOST_TOKENS      host=token,host=token per-host token overrides
+//	AO_REMOTE_SERVE_WEB        host the web client on the network listener off|on (default off)
 //
 // The bind host is not configurable: the daemon is loopback-only by design.
 func Load() (Config, error) {
@@ -302,6 +319,14 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.GitLab.HostTokens = tokens
+	}
+
+	if raw := os.Getenv("AO_REMOTE_SERVE_WEB"); raw != "" {
+		v, err := parseToggleEnv("AO_REMOTE_SERVE_WEB", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.RemoteAccess.ServeWebClient = v
 	}
 
 	runFile, err := resolveRunFilePath()

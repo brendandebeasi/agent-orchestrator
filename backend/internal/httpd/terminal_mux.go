@@ -51,7 +51,7 @@ func networkUpgradeOriginAllowed(r *http.Request, allowedOrigins []string) bool 
 	if origin == "" {
 		return true // native clients (the mobile app, the CLI) send none
 	}
-	if strings.EqualFold(origin, "http://"+r.Host) || strings.EqualFold(origin, "https://"+r.Host) {
+	if isSelfOrigin(r, origin) {
 		return true // the web client this daemon served
 	}
 	for _, allowed := range allowedOrigins {
