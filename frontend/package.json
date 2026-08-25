@@ -22,6 +22,7 @@
 		"dev": "electron-forge start",
 		"dev:web": "VITE_NO_ELECTRON=1 vite --config vite.renderer.config.ts",
 		"dev:web:preview": "VITE_NO_ELECTRON=1 VITE_AO_PREVIEW=1 vite --config vite.renderer.config.ts",
+		"launch:profile": "node ./scripts/launch-profile.mjs",
 		"prepackage": "npm run build:daemon && npm run build:tmux && npm run browser-runtime:prepare && npm run build:acp-runtime",
 		"package": "electron-forge package",
 		"premake": "npm run build:daemon && npm run build:tmux && npm run browser-runtime:prepare && npm run build:acp-runtime",
