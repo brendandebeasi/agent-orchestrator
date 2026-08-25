@@ -13,6 +13,7 @@
  * server is really there and really accepted us.
  */
 
+import { serverLabelFromAddress } from "../../shared/remote-server";
 import { setServerVersion } from "./server-connection";
 import { getServerTarget, setRemoteServerTarget } from "./server-target";
 
@@ -61,50 +62,6 @@ export type ProbeRequest = {
 	/** Caller-owned cancellation, on top of this module's own timeout. */
 	signal?: AbortSignal;
 };
-
-/**
- * Turn what an operator types into an origin, or return null if it cannot be
- * one.
- *
- * People type `192.168.1.9:3010`, `my-box.tailnet.ts.net`, and
- * `http://my-box:3010/` — all of which mean the same thing and none of which
- * `new URL()` accepts on its own. The scheme is defaulted rather than demanded
- * because requiring it turns the most common input into an error message, and
- * plain http is the documented shape of this listener (TLS is the operator's to
- * put in front of it), so defaulting to https would break more addresses than
- * it protected.
- */
-export function normalizeServerAddress(raw: string): string | null {
-	const trimmed = raw.trim();
-	if (trimmed === "") return null;
-	const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `http://${trimmed}`;
-	let url: URL;
-	try {
-		url = new URL(withScheme);
-	} catch {
-		return null;
-	}
-	if (url.hostname === "") return null;
-	// A path, a query, or a fragment is not part of an origin, and silently
-	// keeping one would produce requests to `/app/api/v1/...`. Dropping them is
-	// friendlier than rejecting the address, because the usual way one appears
-	// is the operator pasting the URL out of a browser that is already on the
-	// web client.
-	return `${url.protocol}//${url.host}`;
-}
-
-/**
- * A human-facing label for a server address: the host, without the scheme or a
- * default port. It is what the operator recognizes at a glance, and it is never
- * used as an identifier — the base URL is.
- */
-export function serverLabelFromAddress(baseUrl: string): string {
-	try {
-		return new URL(baseUrl).host;
-	} catch {
-		return baseUrl;
-	}
-}
 
 /**
  * Ask a server whether it is a daemon and whether it accepts this password.

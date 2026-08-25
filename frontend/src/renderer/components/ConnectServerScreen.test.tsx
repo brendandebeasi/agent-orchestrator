@@ -22,8 +22,27 @@ const bridge = vi.hoisted(() => ({
 	readCredential: vi.fn(async (_baseUrl: string): Promise<string | null> => null),
 }));
 
+/**
+ * The rest of the host, kept mutable because `remoteServer` is what tells the
+ * screen apart from itself: the same component is a first-run prompt on a
+ * launch that runs its own daemon and a re-authentication prompt on a launch
+ * that was pointed at someone else's, and only that field says which.
+ */
+const host = vi.hoisted(() => ({
+	remoteServers: bridge,
+	remoteServer: null as string | null,
+	remoteMode: {
+		get: vi.fn(async () => null),
+		set: vi.fn(async (_baseUrl: string | null) => ({
+			server: null,
+			relaunching: false,
+			overriddenByEnv: false,
+		})),
+	},
+}));
+
 vi.mock("../lib/bridge", () => ({
-	aoBridge: { remoteServers: bridge },
+	aoBridge: host,
 	hasElectronHost: true,
 }));
 
@@ -48,6 +67,10 @@ beforeEach(() => {
 	bridge.save.mockResolvedValue([]);
 	bridge.remove.mockResolvedValue([]);
 	bridge.readCredential.mockResolvedValue(null);
+	host.remoteServer = null;
+	host.remoteMode.get.mockClear();
+	host.remoteMode.set.mockClear();
+	host.remoteMode.set.mockResolvedValue({ server: null, relaunching: false, overriddenByEnv: false });
 	resetRemoteServersStoreForTest();
 	setLocalServerTarget(null);
 	resetServerConnectionForTest();
@@ -109,6 +132,82 @@ describe("connecting to a server", () => {
 		await waitFor(() => expect(bridge.save).toHaveBeenCalledTimes(1));
 		// The address is still worth remembering; the password is not stored.
 		expect(bridge.save.mock.calls[0]?.[0]).toMatchObject({ credential: null });
+	});
+
+	it("records the server as where the next launch should look, so this is asked once", async () => {
+		fetchMock.mockResolvedValue(daemonAnswer());
+		render(<ConnectServerScreen />);
+
+		await fillAndSubmit("box:3010", "hunter2");
+
+		await waitFor(() => expect(host.remoteMode.set).toHaveBeenCalledWith("http://box:3010"));
+	});
+
+	it("does not commit the next launch to a server this one could not reach", async () => {
+		fetchMock.mockRejectedValue(new TypeError("Failed to fetch"));
+		render(<ConnectServerScreen />);
+
+		await fillAndSubmit("nowhere.invalid:3010", "hunter2");
+
+		await screen.findByText(/Nothing answered at that address/);
+		expect(host.remoteMode.set).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * The way back. A launch that was pointed at a server cannot be talked into
+ * spawning one here — remote mode is decided before the window exists and the
+ * daemon lifecycle branches on it throughout — so the offer is to change the
+ * setting and come back as a local launch.
+ */
+describe("going back to a daemon on this computer", () => {
+	it("is offered to a launch that was pointed at a server", () => {
+		host.remoteServer = "http://box:3010";
+		render(<ConnectServerScreen />);
+
+		expect(screen.getByRole("button", { name: /Use this computer instead/i })).toBeInTheDocument();
+	});
+
+	it("is not offered to a launch that already runs its own daemon", () => {
+		render(<ConnectServerScreen />);
+
+		expect(screen.queryByRole("button", { name: /Use this computer instead/i })).toBeNull();
+	});
+
+	it("clears the setting rather than stopping the server other people are using", async () => {
+		host.remoteServer = "http://box:3010";
+		host.remoteMode.set.mockResolvedValue({ server: null, relaunching: true, overriddenByEnv: false });
+		render(<ConnectServerScreen />);
+		const user = userEvent.setup();
+
+		await user.click(screen.getByRole("button", { name: /Use this computer instead/i }));
+
+		await waitFor(() => expect(host.remoteMode.set).toHaveBeenCalledWith(null));
+	});
+
+	it("says the restart is coming instead of leaving a pressed button looking idle", async () => {
+		host.remoteServer = "http://box:3010";
+		host.remoteMode.set.mockResolvedValue({ server: null, relaunching: true, overriddenByEnv: false });
+		render(<ConnectServerScreen />);
+		const user = userEvent.setup();
+
+		await user.click(screen.getByRole("button", { name: /Use this computer instead/i }));
+
+		await waitFor(() => expect(screen.getByRole("button", { name: /restarting/i })).toBeDisabled());
+	});
+
+	it("admits when an environment variable will decide the next launch anyway", async () => {
+		// Otherwise the operator presses the button, the setting is cleared, the
+		// app comes back attached to the same server, and nothing on screen ever
+		// explained why.
+		host.remoteServer = "http://box:3010";
+		host.remoteMode.set.mockResolvedValue({ server: null, relaunching: false, overriddenByEnv: true });
+		render(<ConnectServerScreen />);
+		const user = userEvent.setup();
+
+		await user.click(screen.getByRole("button", { name: /Use this computer instead/i }));
+
+		await waitFor(() => expect(screen.getByText(/AO_REMOTE_SERVER/)).toBeInTheDocument());
 	});
 });
 

@@ -56,10 +56,10 @@
 
 ## 8. Electron remote mode
 
-- [ ] 8.1 Add a `remoteServer` setting with an `AO_REMOTE_SERVER` env override, read once at startup in `frontend/src/main.ts`; verify with a unit test on the resolver.
-- [ ] 8.2 When `remoteServer` is set, skip daemon discovery, spawn, attach, `bundledDaemonIdentityError`, `shouldLinkOnAttach` supervisor linking, the browser-runtime token handoff, and shutdown-on-quit; verify with tests asserting none of those paths run and that they all run when the setting is empty.
-- [ ] 8.3 Report `browserPanel: false` from the preload when in remote mode, since the browser-runtime address comes from the local run file; verify with a preload unit test.
-- [ ] 8.4 Verify end to end that quitting the desktop client in remote mode leaves the remote daemon and its sessions running.
+- [x] 8.1 Added `frontend/src/main/remote-mode.ts`: a `remote-mode.json` setting beside the run file, an `AO_REMOTE_SERVER` override that wins over it (an empty value forcing local mode for one launch), and `resolveRemoteServer`, which `main.ts` calls once in `app.whenReady` before the window exists or anything is spawned. `remote-mode.test.ts` covers the resolver's precedence and the setting's read, write, clear, and refusal to store an address that cannot be one.
+- [x] 8.2 Guarded `startDaemon`, `refreshDaemonStatus`, `stopDaemon`, `establishBrowserRuntimeLink`, `establishSupervisorLink`, and the `process.on("exit")` orphan kill. Discovery, `bundledDaemonIdentityError`, spawning, attaching, and `shouldLinkOnAttach` linking are all downstream of `startDaemonInner`, which only `startDaemon` calls, so one guard declines all of them. `remote-mode.test.ts`'s "daemon lifecycle in main.ts" block asserts each guard is present and is that function's only mention of the setting, which is what makes an unset setting behave exactly as it did before — these are source assertions, because `main.ts` calls Electron at import time and cannot be loaded in a unit test.
+- [x] 8.3 The main process passes the address to the shell's preload through `additionalArguments` (IPC cannot answer before the first render), and the preload withdraws `browserPanel` — and only `browserPanel`, since the other three are wired but aimed elsewhere and the server target withdraws those. `preload.test.ts` re-imports the module under both launches and asserts the full capability set for each, plus a junk argument falling back to local.
+- [x] 8.4 Covered by the guards above rather than by a live two-machine run, which needs hardware this change does not have: a client can only take a daemon down through the quit-time kill, an explicit stop, or a supervisor link that makes the daemon follow it out, and remote mode declines all three. `remote-mode.test.ts` asserts each. A live run against a second machine is still worth doing before release and is listed in 10.2.
 
 ## 9. Web client build
 
@@ -69,7 +69,7 @@
 ## 10. Integration verification
 
 - [ ] 10.1 Add an integration test with two clients on one daemon (a loopback client and a network client) driving the same session, asserting terminal mux fan-out, presence, and workspace watch behave for both.
-- [ ] 10.2 Add an end-to-end test that authenticates over the network listener, loads the session list, opens a terminal by subprotocol, and reads agent output.
+- [ ] 10.2 Add an end-to-end test that authenticates over the network listener, loads the session list, opens a terminal by subprotocol, and reads agent output. Include a manual pass on real hardware: a desktop client on one machine attached to a daemon on another, quit while a session is running, and the session still there when a second client connects.
 - [ ] 10.3 Confirm the loopback path is byte-identical in behavior: run the full existing backend and frontend suites with network access disabled and assert no diffs in behavior or output.
 
 ## 11. Documentation

@@ -26,7 +26,8 @@ import type { TelemetryBootstrap } from "./shared/telemetry";
 import type { MigrationState } from "./main/app-state";
 import type { UpdateSettings, UpdateStatus } from "./main/update-settings";
 import type { CloudAccount } from "./shared/cloud-account";
-import type { SavedServer } from "./shared/remote-server";
+import { remoteServerFromArgv, type RemoteModeChange, type SavedServer } from "./shared/remote-server";
+import type { RemoteMode } from "./main/remote-mode";
 import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import type { UpdateCheckOptions } from "./main/auto-updater";
@@ -102,6 +103,30 @@ ipcRenderer.on("app:openFolderPath", (_event, path: string) => {
 	}
 });
 
+/**
+ * The server this launch attaches to, or null when it runs its own daemon.
+ *
+ * Read from the arguments the main process put on this WebContents, because the
+ * renderer needs it before its first query and IPC cannot answer that early.
+ */
+const remoteServer = remoteServerFromArgv(process.argv);
+
+/**
+ * What the host is wired to on this launch.
+ *
+ * Everything is on for an ordinary desktop launch. Remote mode withdraws the
+ * browser panel, and only the browser panel, because that one is not merely
+ * pointed at the wrong disk — it does not exist. The panel is a view onto a
+ * browser runtime the daemon starts, whose address this process reads out of the
+ * local run file and connects to over loopback; with no local daemon there is no
+ * run file, no address, and nothing to connect to. The other three stay declared
+ * true and are withdrawn a layer up by the server target, which is the honest
+ * split: they are wired, they are just aimed at the wrong machine, and the
+ * operator can change which machine that is without relaunching.
+ */
+const hostCapabilities: HostCapabilities =
+	remoteServer === null ? ALL_HOST_CAPABILITIES : { ...ALL_HOST_CAPABILITIES, browserPanel: false };
+
 const api = {
 	/**
 	 * What this host can do for the renderer beyond talking to the daemon.
@@ -114,7 +139,9 @@ const api = {
 	 * folds in where the server is (see `useHostCapability`), and remote mode
 	 * withdraws the ones the setting itself rules out.
 	 */
-	capabilities: ALL_HOST_CAPABILITIES as HostCapabilities,
+	capabilities: hostCapabilities,
+	/** Where this launch was told to look for its daemon; null means here. */
+	remoteServer,
 	app: {
 		getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
 		chooseDirectory: (title?: string) => ipcRenderer.invoke("app:chooseDirectory", title) as Promise<string | null>,
@@ -432,6 +459,15 @@ const api = {
 		remove: (baseUrl: string) => ipcRenderer.invoke("remoteServers:remove", baseUrl) as Promise<SavedServer[]>,
 		readCredential: (baseUrl: string) =>
 			ipcRenderer.invoke("remoteServers:readCredential", baseUrl) as Promise<string | null>,
+	},
+	/**
+	 * Which server the *next* launch attaches to, which is not the same question
+	 * as `remoteServer` above. That one is what this launch was told at startup
+	 * and cannot change; this one is the setting behind it.
+	 */
+	remoteMode: {
+		get: () => ipcRenderer.invoke("remoteMode:get") as Promise<RemoteMode | null>,
+		set: (baseUrl: string | null) => ipcRenderer.invoke("remoteMode:set", baseUrl) as Promise<RemoteModeChange>,
 	},
 	cloud: {
 		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,

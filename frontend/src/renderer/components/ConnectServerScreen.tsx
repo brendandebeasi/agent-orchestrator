@@ -2,12 +2,9 @@ import { Loader2, Server, Trash2, TriangleAlert } from "lucide-react";
 import { type FormEvent, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import aoLogo from "../../../assets/ao-logo.svg";
-import {
-	connectToServer,
-	normalizeServerAddress,
-	serverLabelFromAddress,
-	type ConnectionProbe,
-} from "../lib/connect-server";
+import { normalizeServerAddress, serverLabelFromAddress } from "../../shared/remote-server";
+import { aoBridge } from "../lib/bridge";
+import { connectToServer, type ConnectionProbe } from "../lib/connect-server";
 import { useRemoteServersStore } from "../stores/remote-servers-store";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -51,6 +48,18 @@ export function ConnectServerScreen({
 	// attempt succeeded" — the screen unmounts on success.
 	const [problem, setProblem] = useState<ConnectionProbe | null>(initialProblem);
 	const [addressInvalid, setAddressInvalid] = useState(false);
+	// The host was asked to stop attaching to a server, and answered that an
+	// environment variable will decide the next launch anyway. Worth saying out
+	// loud, because the operator pressed a button and nothing visible happened.
+	const [envOverride, setEnvOverride] = useState(false);
+	// Set once the host has agreed to restart. It never clears: the window is on
+	// its way out, and a control that came back to life would invite a second
+	// press during the moment before it goes.
+	const [restarting, setRestarting] = useState(false);
+	// Only a launch that was pointed at a server has somewhere to come back
+	// from. A browser tab reports null here too, which is right — it has no
+	// local daemon to offer.
+	const launchedRemote = aoBridge.remoteServer !== null;
 
 	const servers = useRemoteServersStore((state) => state.servers);
 	const loadServers = useRemoteServersStore((state) => state.load);
@@ -90,7 +99,36 @@ export function ConnectServerScreen({
 				{ baseUrl, label, lastConnectedAt: new Date().toISOString() },
 				remember ? password : null,
 			);
+			// Also recorded as where the *next* launch should look, so an
+			// operator who connected here does not have to do it again every
+			// morning — and so the client stops starting a local daemon it was
+			// never going to use. On a browser host this is a no-op: its server
+			// is whichever one served the page.
+			await aoBridge.remoteMode.set(baseUrl);
 			onConnected?.(baseUrl);
+		} finally {
+			setBusy(false);
+		}
+	}
+
+	/**
+	 * Stop attaching to a server and go back to running one here.
+	 *
+	 * This is the only way back. Remote mode is resolved once per launch and the
+	 * daemon lifecycle branches on it throughout, so a process that started
+	 * remote cannot be talked into spawning a daemon — it has to come back as a
+	 * local launch, which is what the host's restart is for. The remote daemon
+	 * is left alone; other people's sessions are running on it.
+	 */
+	async function useLocalDaemon() {
+		if (busy || restarting) return;
+		setBusy(true);
+		setProblem(null);
+		setEnvOverride(false);
+		try {
+			const change = await aoBridge.remoteMode.set(null);
+			setEnvOverride(change.overriddenByEnv);
+			if (change.relaunching) setRestarting(true);
 		} finally {
 			setBusy(false);
 		}
@@ -171,11 +209,34 @@ export function ConnectServerScreen({
 						{problem ? <ProblemText text={t(problemMessageKey(problem))} /> : null}
 					</div>
 
-					<Button className="w-full" disabled={busy} type="submit">
+					<Button className="w-full" disabled={busy || restarting} type="submit">
 						{busy ? <Loader2 aria-hidden="true" className="animate-spin" /> : null}
 						{busy ? t("connectServer.connecting") : t("connectServer.connect")}
 					</Button>
 				</form>
+
+				{launchedRemote ? (
+					<div className="mt-4 flex flex-col items-center gap-1.5">
+						<Button
+							className="w-full"
+							disabled={busy || restarting}
+							onClick={() => void useLocalDaemon()}
+							type="button"
+							variant="ghost"
+						>
+							{restarting ? <Loader2 aria-hidden="true" className="animate-spin" /> : null}
+							{restarting ? t("connectServer.useLocalRestarting") : t("connectServer.useLocal")}
+						</Button>
+						<p className="px-1 text-center text-xs text-muted-foreground">
+							{t("connectServer.useLocalHint")}
+						</p>
+						{envOverride ? (
+							<p aria-live="polite" className="px-1 text-center text-xs text-warning" role="status">
+								{t("connectServer.useLocalEnvOverride")}
+							</p>
+						) : null}
+					</div>
+				) : null}
 
 				{servers.length > 0 ? (
 					<div className="mt-8 flex flex-col gap-1">

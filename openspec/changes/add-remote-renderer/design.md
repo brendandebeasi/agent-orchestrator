@@ -296,6 +296,29 @@ The browser-runtime link is skipped rather than adapted: it reads
 this machine and is meaningless for a remote one. That is why `browserPanel` is a
 capability rather than a feature that degrades.
 
+Two consequences fell out of building it, both worth recording.
+
+**The setting is read once per launch and cannot change while the app runs.** Half a dozen
+paths branch on it, and a process that had already spawned a daemon and then decided it was
+remote would have to unwind all of them. Connecting to a server writes the setting for the
+*next* launch; going back to a local daemon writes it and asks Electron to relaunch. That
+is why the preload learns the address through `additionalArguments` rather than IPC — the
+value is fixed before the window exists, and the renderer needs it before its first query,
+which is earlier than any round trip can answer.
+
+**The renderer needed a different answer to "is the server up".** It gates nearly everything
+on the supervisor's `DaemonStatus`, and in remote mode the supervisor honestly reports
+`stopped` forever, for a daemon nobody asked it to start. Passing that through would leave a
+connected client on the startup loader under a banner about the wrong computer.
+`remoteServerStatus` answers for the server actually in use instead: a remote target is
+committed only after an authenticated probe succeeded, so having one *is* the readiness
+signal, and the port is read off the address rather than invented. A link that drops later is
+reported by the indicator beside the server's name — a remote link blinks, and a client that
+discarded its board on every blink would be unusable. The same reasoning is why
+`applyDaemonStatus` drops local status events outright once the client is aimed elsewhere:
+recording them would explain a remote server's failures with a local daemon, and applying
+them would un-aim the client on every event.
+
 ### D11. Version compatibility is checked at handshake, reported, not enforced
 
 `POST /api/v1/remote/session` returns the daemon's app version (already carried as

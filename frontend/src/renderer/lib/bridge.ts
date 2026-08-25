@@ -42,6 +42,11 @@ export const aoBridge: AoBridge =
 		// gated on the capability and reaching one anyway is a gating bug worth
 		// hearing about.
 		capabilities: { ...NO_HOST_CAPABILITIES },
+		// A page served over HTTP was not launched with arguments, so there is
+		// nothing to read a remote address out of. It also does not need one:
+		// the daemon it talks to is the one that served it, which the bootstrap
+		// works out from the page's own origin.
+		remoteServer: null,
 		app: {
 			getVersion: async () => "0.0.0-preview",
 			chooseDirectory: async () => unavailable("app.chooseDirectory"),
@@ -200,6 +205,13 @@ export const aoBridge: AoBridge =
 			save: async () => [],
 			remove: async () => [],
 			readCredential: async () => null,
+		},
+		// A browser has no next launch to configure. Its server is whichever one
+		// served the page, and it changes by visiting a different address, so
+		// there is no setting here to read or write.
+		remoteMode: {
+			get: async () => null,
+			set: async () => ({ server: null, relaunching: false, overriddenByEnv: false }),
 		},
 		cloud: {
 			getSession: async () => null,

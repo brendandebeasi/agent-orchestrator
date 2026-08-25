@@ -102,6 +102,9 @@ if (typeof window !== "undefined") {
 		// so the default is every capability on. A case testing a withdrawn
 		// feature overrides this entry rather than deleting the bridge.
 		capabilities: { ...ALL_HOST_CAPABILITIES },
+		// Unit tests default to a launch that runs its own daemon. A case
+		// covering remote mode overrides this entry.
+		remoteServer: null,
 		app: {
 			getVersion: async () => "0.0.0-test",
 			chooseDirectory: async () => null,
@@ -293,6 +296,12 @@ if (typeof window !== "undefined") {
 			save: async () => [],
 			remove: async () => [],
 			readCredential: async () => null,
+		},
+		// The default launch runs its own daemon, so there is no remote-mode
+		// setting recorded. A case covering remote mode overrides this.
+		remoteMode: {
+			get: async () => null,
+			set: async () => ({ server: null, relaunching: false, overriddenByEnv: false }),
 		},
 		cloud: {
 			getSession: async () => null,

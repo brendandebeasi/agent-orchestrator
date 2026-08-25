@@ -38,6 +38,13 @@ at https://github.com/Untrivial-ai/agent-orchestrator/releases.
   with it. A browser client keeps neither, which its session cookie already covers.
 - A client and server on different versions say so, with both versions, next to the server
   name. It is a note rather than a refusal to connect.
+- The desktop client can be pointed at a daemon on another computer and stop running one
+  of its own. Connecting to a server records it as where the next launch should look, so
+  the question is asked once; `AO_REMOTE_SERVER` overrides the setting for a single
+  launch. Such a client starts no daemon, attaches to none already running, and — the
+  point of the whole thing on a shared machine — takes none down when it quits. Going back
+  to a local daemon is a button on the connection screen, which clears the setting and
+  restarts the app.
 - Planning artifacts for remote renderer support under
   `openspec/changes/add-remote-renderer/` — proposal, `remote-access` and `remote-client`
   specs, design, and task list.
@@ -60,3 +67,13 @@ at https://github.com/Untrivial-ai/agent-orchestrator/releases.
   are read with `fetch` instead of `EventSource`, which cannot present a credential.
   Reconnect and last-event resume, which `EventSource` provided, are now explicit: the
   reader climbs a jittered backoff ladder and resumes with `Last-Event-ID`.
+- "Is the server ready" is now answered by the server in use rather than always by the
+  local supervisor. A client attached to another computer would otherwise sit on the
+  startup loader forever, because the supervisor it is still wired to correctly reports
+  that it never started a daemon. Status events from the local supervisor are dropped
+  entirely once the client is aimed elsewhere, so they cannot re-aim it or explain a
+  remote server's failures with a local daemon nobody asked for.
+- The browser panel is withdrawn on a client attached to a remote server. Unlike the other
+  host features, it is absent rather than misdirected: the panel attaches to a browser
+  runtime whose address the app reads from this computer's run file, and there is no such
+  file when no daemon runs here.

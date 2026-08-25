@@ -112,6 +112,8 @@ import { dockBounceType, shouldReplaceBounce, shouldSignalAttention, shouldToast
 import { buildMacAppMenuTemplate, buildWindowsAppMenuTemplate } from "./main/menu";
 import { ancestorRepositorySetupWarning, scanImportFolder } from "./main/import-folder-scan";
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
+import { readRemoteModeSetting, REMOTE_SERVER_ENV, resolveRemoteServer, writeRemoteModeSetting, type RemoteMode } from "./main/remote-mode";
+import { REMOTE_SERVER_ARG_PREFIX, type RemoteModeChange } from "./shared/remote-server";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -188,6 +190,17 @@ const OPEN_FOLDER_PATH_CHANNEL = "app:openFolderPath";
 // whose renderer isn't mounted yet. Flushed once the shell signals readiness
 // via TRAY_RENDERER_READY_CHANNEL — see the OPEN_FOLDER_PATH_CHANNEL handler.
 let pendingFolderPath: string | null = null;
+/**
+ * The server this launch attaches to, or null when it runs its own daemon.
+ *
+ * Resolved once in `app.whenReady`, before the window exists and before
+ * anything is spawned, and read from there by every branch of the daemon
+ * lifecycle. It cannot change while the app runs: half a dozen code paths
+ * behave differently depending on it, and a client that had already spawned a
+ * daemon and then decided it was remote would have to unwind all of them. The
+ * setting takes effect on the next launch.
+ */
+let remoteMode: RemoteMode | null = null;
 let daemonProcess: ChildProcess | null = null;
 let daemonStoppingProcess: ChildProcess | null = null;
 let daemonRestartAfterExitProcess: ChildProcess | null = null;
@@ -451,6 +464,12 @@ async function createWindowInternal(): Promise<void> {
 		mainWindow,
 		WebContentsView,
 		preload: preloadPath(),
+		// The renderer has to know which server it is talking to before its first
+		// query, and IPC cannot answer that early — the first render has already
+		// happened by the time a round trip returns. A launch argument is in
+		// `process.argv` before the preload's first line runs, which is early
+		// enough.
+		additionalArguments: remoteMode ? [`${REMOTE_SERVER_ARG_PREFIX}${remoteMode.baseUrl}`] : [],
 	});
 	windowComposition = composition;
 	syncNativeWindowBackground();
@@ -955,6 +974,12 @@ function disposeBrowserRuntimeLink(): void {
 
 function establishBrowserRuntimeLink(): void {
 	if (!browserViewHost) return;
+	// The address of the browser runtime comes out of the local run file, which
+	// a remote daemon does not write here. Reading this machine's run file in
+	// remote mode would find a stale address from some previous local daemon and
+	// drive an agent's browser on the wrong computer. The preload withdraws the
+	// browser panel for the same reason.
+	if (remoteMode) return;
 	const rfp = runFilePath();
 	if (!rfp) {
 		console.warn("AO: browser runtime link skipped; run-file path unavailable");
@@ -999,6 +1024,12 @@ function establishBrowserRuntimeLink(): void {
 }
 
 function establishSupervisorLink(): void {
+	// Unreachable in remote mode — every caller is inside `startDaemonInner`,
+	// which never runs — but stated here because of what the link does: it makes
+	// the daemon exit when this process does. Establishing one against a server
+	// shared with other people would turn closing this window into a shutdown
+	// of their sessions.
+	if (remoteMode) return;
 	const rfp = runFilePath();
 	const addr =
 		process.platform === "win32"
@@ -1053,6 +1084,10 @@ async function gracefullyReplaceDaemonForBrowser(status: DaemonStatus): Promise<
 }
 
 async function refreshDaemonStatus(): Promise<DaemonStatus> {
+	// Nothing to refresh, and nothing to look for: a probe here would find
+	// whatever daemon happens to be listening on this machine's port and report
+	// it as this client's server, which it is not.
+	if (remoteMode) return daemonStatus;
 	if (daemonProcess) {
 		return daemonStatus;
 	}
@@ -1085,6 +1120,12 @@ async function refreshDaemonStatus(): Promise<DaemonStatus> {
 }
 
 async function startDaemon(): Promise<DaemonStatus> {
+	// The single chokepoint for remote mode. Everything the supervisor does to
+	// a daemon — discovery, the bundled-binary identity check, spawning,
+	// attaching to one already running, and linking to it so it stops when this
+	// process does — is downstream of `startDaemonInner`, so declining here
+	// declines all of it at once rather than in six places that could drift.
+	if (remoteMode) return daemonStatus;
 	if (daemonStartPromise) {
 		return daemonStartPromise;
 	}
@@ -1575,6 +1616,10 @@ function killDaemon(child: ChildProcess): void {
 }
 
 function stopDaemon(): DaemonStatus {
+	// The remote daemon is not this client's to stop. Other people's sessions
+	// are running on it, and the operator asking this window to close is not
+	// asking for that. There is also nothing local to stop.
+	if (remoteMode) return daemonStatus;
 	daemonStartEpoch += 1;
 	daemonStartPromise = null;
 	// An explicit stop (or a newer restart request) cancels any deferred restart
@@ -1703,6 +1748,30 @@ ipcMain.handle("remoteServers:remove", (event, baseUrl: string) => {
 ipcMain.handle("remoteServers:readCredential", (event, baseUrl: string) => {
 	assertShellSender(event, "remote server");
 	return readRemoteCredential(editorStateDir(), typeof baseUrl === "string" ? baseUrl : "");
+});
+ipcMain.handle("remoteMode:get", (event) => {
+	assertShellSender(event, "remote mode");
+	return remoteMode;
+});
+ipcMain.handle("remoteMode:set", async (event, baseUrl: string | null) => {
+	assertShellSender(event, "remote mode");
+	const server = await writeRemoteModeSetting(editorStateDir(), typeof baseUrl === "string" ? baseUrl : null);
+	const overriddenByEnv = process.env[REMOTE_SERVER_ENV] !== undefined;
+	// A launch that is already remote cannot be talked into running a daemon:
+	// the decision was made before the window existed and half the daemon
+	// lifecycle is branched on it. Relaunching is what actually gives the
+	// operator the local daemon they just asked for. Deferred past the reply so
+	// the renderer learns what is about to happen before it happens; a launch
+	// whose remote mode came from the environment would come back remote, so
+	// restarting it would be a pointless flicker.
+	const relaunching = remoteMode !== null && server === null && !overriddenByEnv;
+	if (relaunching) {
+		setTimeout(() => {
+			app.relaunch();
+			app.quit();
+		}, 0);
+	}
+	return { server, relaunching, overriddenByEnv } satisfies RemoteModeChange;
 });
 ipcMain.handle("app:getVersion", () => app.getVersion());
 ipcMain.handle("app:openExternal", async (_event, url: string) => {
@@ -2256,6 +2325,22 @@ app.whenReady().then(async () => {
 		keybindingOverrides = await readKeybindingOverrides(path.dirname(keybindingRunFile));
 	}
 
+	// Before the window and before anything is spawned: the preload reads the
+	// answer out of its launch arguments, and `startDaemon` reads it to decide
+	// whether there is a daemon to start at all.
+	remoteMode = resolveRemoteServer(
+		process.env,
+		keybindingRunFile ? await readRemoteModeSetting(path.dirname(keybindingRunFile)) : null,
+	);
+	if (remoteMode) {
+		console.info(`AO: attaching to ${remoteMode.baseUrl} (${remoteMode.source}); no local daemon will be started`);
+		setDaemonStatus({
+			state: "stopped",
+			message: `This client is attached to ${remoteMode.baseUrl} and runs no daemon of its own.`,
+			code: "not_configured",
+		});
+	}
+
 	registerRendererProtocol();
 	applyRuntimeAppIcon();
 	const initialUiSettings = keybindingRunFile
@@ -2328,7 +2413,13 @@ app.on("before-quit", (event) => {
 // AO_KEEP_DAEMON opts out entirely: the daemon is deliberately spawned without a
 // supervisor link so it persists across app quit, so this orphan-cleanup kill
 // must be skipped — otherwise it would defeat the whole point on quit.
+//
+// Remote mode is stated rather than left to `daemonProcess` being null, which
+// it always is there. This is the line that decides whether quitting takes a
+// daemon with it, and the answer for a shared machine has to be visible at the
+// place it is decided.
 process.on("exit", () => {
+	if (remoteMode) return;
 	if (daemonProcess && !supervisorLink?.connected && !keepDaemonAlive(process.env)) {
 		killDaemon(daemonProcess);
 	}

@@ -80,6 +80,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					directoryPicker: true,
 					browserPanel: true,
 				},
+				// These fakes stand in for a launch that runs its own daemon, so
+				// there is no remote address to report.
+				remoteServer: null,
 				app: {
 					getVersion: async () => version,
 					chooseDirectory: async () => null,
@@ -235,6 +238,12 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					save: async () => [],
 					remove: async () => [],
 					readCredential: async () => null,
+				},
+				// The default launch runs its own daemon, so there is no remote-mode
+				// setting recorded. A case covering remote mode overrides this.
+				remoteMode: {
+					get: async () => null,
+					set: async () => ({ server: null, relaunching: false, overriddenByEnv: false }),
 				},
 				cloud: {
 					getSession: async () => null,
@@ -546,6 +555,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					directoryPicker: true,
 					browserPanel: true,
 				},
+				// These fakes stand in for a launch that runs its own daemon, so
+				// there is no remote address to report.
+				remoteServer: null,
 				app: {
 					getVersion: async () => version,
 					chooseDirectory: async () => null,
@@ -691,6 +703,12 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					save: async () => [],
 					remove: async () => [],
 					readCredential: async () => null,
+				},
+				// The default launch runs its own daemon, so there is no remote-mode
+				// setting recorded. A case covering remote mode overrides this.
+				remoteMode: {
+					get: async () => null,
+					set: async () => ({ server: null, relaunching: false, overriddenByEnv: false }),
 				},
 				cloud: {
 					getSession: async () => null,

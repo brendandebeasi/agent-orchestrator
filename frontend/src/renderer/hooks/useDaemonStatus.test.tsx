@@ -38,6 +38,9 @@ vi.mock("../lib/api-client", () => ({
 }));
 
 import { useDaemonStatus } from "./useDaemonStatus";
+// Not mocked: the hook's remote branch turns on the real target store, and a
+// stub of it would only assert that the stub was read.
+import { setLocalServerTarget, setRemoteServerTarget } from "../lib/server-target";
 
 type DaemonStatus = { state: "starting" | "ready" | "stopped" | "error"; port?: number; message?: string };
 
@@ -58,6 +61,9 @@ beforeEach(() => {
 
 afterEach(() => {
 	vi.useRealTimers();
+	// The target store outlives a test, so a case that moved it has to put it
+	// back or every case after it would be running as a remote client.
+	act(() => setLocalServerTarget(null));
 });
 
 describe("useDaemonStatus", () => {
@@ -193,5 +199,62 @@ describe("useDaemonStatus", () => {
 
 		expect(stopTransportMock).toHaveBeenCalledTimes(1);
 		expect(removeStatusMock).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe("useDaemonStatus against a server on another computer", () => {
+	function aimAtWorkshop(): void {
+		act(() =>
+			setRemoteServerTarget({
+				baseUrl: "http://workshop.local:3010",
+				label: "workshop.local:3010",
+				credential: "hunter2",
+			}),
+		);
+	}
+
+	it("answers for the server in use rather than for the idle local supervisor", async () => {
+		// The supervisor is still there and would answer "stopped" forever,
+		// because in remote mode it was never asked to start anything. The
+		// shell gates the whole board on this answer, so passing that through
+		// would leave a connected client on the startup loader.
+		getStatusMock.mockResolvedValue({ state: "stopped", message: "no local daemon" });
+		aimAtWorkshop();
+
+		const { result } = renderHook(() => useDaemonStatus(fakeQueryClient()));
+
+		expect(result.current).toEqual({ state: "ready", port: 3010 });
+	});
+
+	it("stops polling and stops listening to the local supervisor entirely", async () => {
+		aimAtWorkshop();
+
+		renderHook(() => useDaemonStatus(fakeQueryClient()));
+		await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
+
+		expect(getStatusMock).not.toHaveBeenCalled();
+		expect(onStatusMock).not.toHaveBeenCalled();
+	});
+
+	it("still opens the change stream, which is the link that actually reports the server dropping", async () => {
+		aimAtWorkshop();
+
+		const { unmount } = renderHook(() => useDaemonStatus(fakeQueryClient()));
+		await waitFor(() => expect(connectMock).toHaveBeenCalledTimes(1));
+		unmount();
+
+		expect(stopTransportMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("goes back to the supervisor when the client comes home", async () => {
+		getStatusMock.mockResolvedValue({ state: "ready", port: 3037 });
+		aimAtWorkshop();
+		const { result } = renderHook(() => useDaemonStatus(fakeQueryClient()));
+		expect(getStatusMock).not.toHaveBeenCalled();
+
+		act(() => setLocalServerTarget(null));
+
+		await waitFor(() => expect(result.current).toEqual({ state: "ready", port: 3037 }));
+		expect(onStatusMock).toHaveBeenCalled();
 	});
 });

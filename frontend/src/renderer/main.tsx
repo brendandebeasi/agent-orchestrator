@@ -8,7 +8,7 @@ import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import { queryClient } from "./lib/query-client";
 import { aoBridge, hasElectronHost } from "./lib/bridge";
-import { aimAtHostOrigin } from "./lib/daemon-status";
+import { aimAtConfiguredServer } from "./lib/remote-bootstrap";
 import { isPreviewMode } from "./lib/preview-mode";
 import { setClientVersion } from "./lib/server-connection";
 import { mergeUnreadNotification, unreadNotificationsQueryKey } from "./lib/notifications";
@@ -24,7 +24,12 @@ import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
 // Before anything renders, so the first query already has somewhere to go. A
 // preview build is aimed at nothing on purpose: it answers from fixtures and a
 // request that escaped to a server would be a bug worth seeing fail.
-if (!isPreviewMode()) aimAtHostOrigin();
+//
+// The aiming itself is synchronous; the promise is for the one part that is
+// not, a remote launch reading its saved password out of the host's keychain.
+// `renderApp` waits on it so a client that has a password does not flash its
+// connection screen on the way to the board.
+const serverAimed = isPreviewMode() ? Promise.resolve() : aimAtConfiguredServer();
 
 // Only a desktop host knows what release this client is. The browser build has
 // no version of its own yet — its stub reports a placeholder — and comparing a
@@ -103,6 +108,10 @@ async function renderApp(): Promise<void> {
 	// The sound-notifications toggle only needs to be right by the time
 	// Settings renders, so it loads in the background rather than blocking mount.
 	void useSoundNotificationsStore.getState().load();
+	// Unlike the two above, this one is worth holding the first paint for: it
+	// decides whether the shell's first frame is the board or a password prompt,
+	// and it resolves in an IPC round trip. See `aimAtConfiguredServer`.
+	await serverAimed;
 	createRoot(document.getElementById("root") as HTMLElement).render(
 		<React.StrictMode>
 			<I18nextProvider i18n={appI18n}>

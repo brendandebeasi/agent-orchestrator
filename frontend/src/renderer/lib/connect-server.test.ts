@@ -1,11 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-	connectToServer,
-	isConnectedToRemoteServer,
-	normalizeServerAddress,
-	probeServer,
-	serverLabelFromAddress,
-} from "./connect-server";
+import { connectToServer, isConnectedToRemoteServer, probeServer } from "./connect-server";
 import { getServerConnection, resetServerConnectionForTest } from "./server-connection";
 import { getServerCredential, getServerTarget, setLocalServerTarget } from "./server-target";
 
@@ -35,46 +29,6 @@ afterEach(() => {
 	vi.useRealTimers();
 	setLocalServerTarget(null);
 	resetServerConnectionForTest();
-});
-
-describe("normalizeServerAddress", () => {
-	it("adds the scheme people leave off", () => {
-		expect(normalizeServerAddress("192.168.1.9:3010")).toBe("http://192.168.1.9:3010");
-		expect(normalizeServerAddress("my-box.tailnet.ts.net")).toBe("http://my-box.tailnet.ts.net");
-	});
-
-	it("keeps a scheme that was given, including https", () => {
-		expect(normalizeServerAddress("https://ao.example.com")).toBe("https://ao.example.com");
-		expect(normalizeServerAddress("HTTP://Box:3010")).toBe("http://box:3010");
-	});
-
-	it("drops a path, query, or fragment rather than rejecting the address", () => {
-		// The usual way one appears is a paste out of a browser already on the
-		// web client, which is a correct address with extra on the end.
-		expect(normalizeServerAddress("http://box:3010/app/board?x=1#y")).toBe("http://box:3010");
-	});
-
-	it("trims surrounding whitespace", () => {
-		expect(normalizeServerAddress("  box:3010\n")).toBe("http://box:3010");
-	});
-
-	it("rejects input that cannot be an origin", () => {
-		expect(normalizeServerAddress("")).toBeNull();
-		expect(normalizeServerAddress("   ")).toBeNull();
-		expect(normalizeServerAddress("http://")).toBeNull();
-		expect(normalizeServerAddress("::::")).toBeNull();
-	});
-});
-
-describe("serverLabelFromAddress", () => {
-	it("is the host, without the scheme", () => {
-		expect(serverLabelFromAddress("http://box:3010")).toBe("box:3010");
-		expect(serverLabelFromAddress("https://ao.example.com")).toBe("ao.example.com");
-	});
-
-	it("hands back whatever it was given when that is not a URL", () => {
-		expect(serverLabelFromAddress("not a url")).toBe("not a url");
-	});
 });
 
 describe("probeServer", () => {

@@ -140,6 +140,24 @@ export function setRemoteServerTarget(next: { baseUrl: string; label: string; cr
 }
 
 /**
+ * Point the client at a remote server before knowing its password.
+ *
+ * This is how a launch configured for remote mode starts: the address comes
+ * from a setting, the password comes from the keychain a moment later, and the
+ * two do not arrive together. Naming the server first means the connection
+ * screen opens already filled in and the operator sees which machine is being
+ * asked about, rather than an empty form appearing for no stated reason. If the
+ * saved password then turns up, connecting replaces this target and the screen
+ * never renders.
+ */
+export function aimAtRemoteServer(next: { baseUrl: string; label: string }): void {
+	setServerTarget(
+		{ kind: "remote", baseUrl: normalizeBaseUrl(next.baseUrl), label: next.label, requiresAuth: true },
+		null,
+	);
+}
+
+/**
  * Whether the current server shares a filesystem with this client. Read by the
  * capability gate: a browser client served by the daemon it talks to is still
  * remote in the sense that matters here, because the machine running the

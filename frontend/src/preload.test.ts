@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, FOCUS_TERMINAL_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, SET_CLOSE_SHELL_TERMINAL_SHORTCUT_ENABLED_CHANNEL } from "./shared/shortcuts";
 import type { AoBridge } from "./preload";
+import { REMOTE_SERVER_ARG_PREFIX } from "./shared/remote-server";
 
 const electronMocks = vi.hoisted(() => {
 	const listeners = new Map<string, (...args: unknown[]) => void>();
@@ -210,5 +211,72 @@ describe("preload uiSettings bridge", () => {
 
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(1, "uiSettings:get");
 		expect(electronMocks.invoke).toHaveBeenNthCalledWith(2, "uiSettings:set", { locale: "zh-CN" });
+	});
+});
+
+describe("preload host capabilities", () => {
+	// The preload reads its launch arguments once, at module load, because the
+	// renderer needs the answer before its first query. Testing both launches
+	// therefore means re-importing the module under a different `process.argv`
+	// rather than calling something on the bridge already on `window`.
+	async function bridgeForArgv(argv: readonly string[]): Promise<AoBridge> {
+		const originalArgv = process.argv;
+		process.argv = [...argv];
+		try {
+			vi.resetModules();
+			await import("./preload");
+		} finally {
+			process.argv = originalArgv;
+		}
+		const exposed = electronMocks.exposeInMainWorld.mock.calls.filter(([key]) => key === "ao").at(-1);
+		if (!exposed) throw new Error("preload bridge was not exposed");
+		return exposed[1] as AoBridge;
+	}
+
+	it("declares every host capability for a launch that runs its own daemon", async () => {
+		const bridge = await bridgeForArgv(["/Applications/ao.app/Contents/MacOS/ao"]);
+
+		expect(bridge.remoteServer).toBeNull();
+		expect(bridge.capabilities).toEqual({
+			editorHandoff: true,
+			revealInFileManager: true,
+			directoryPicker: true,
+			browserPanel: true,
+		});
+	});
+
+	it("withdraws the browser panel, and only the browser panel, when the launch is pointed at a remote server", async () => {
+		const bridge = await bridgeForArgv([
+			"/Applications/ao.app/Contents/MacOS/ao",
+			`${REMOTE_SERVER_ARG_PREFIX}http://workshop.local:3001`,
+		]);
+
+		expect(bridge.remoteServer).toBe("http://workshop.local:3001");
+		// The panel is a view onto a browser runtime the local daemon starts,
+		// whose address this process reads out of the local run file. With no
+		// local daemon there is no run file and nothing to attach to, so the
+		// feature is absent rather than merely aimed at the wrong machine —
+		// which is why the other three stay on and are withdrawn a layer up by
+		// the server target instead.
+		expect(bridge.capabilities).toEqual({
+			editorHandoff: true,
+			revealInFileManager: true,
+			directoryPicker: true,
+			browserPanel: false,
+		});
+	});
+
+	it("starts locally when the launch argument carries an address that cannot be a server", async () => {
+		// Only the main process writes this argument, and it writes a
+		// normalized address. Anything else was appended by hand, and running
+		// this computer's own daemon is a better answer than pointing every
+		// request at a mangled origin.
+		const bridge = await bridgeForArgv([
+			"/Applications/ao.app/Contents/MacOS/ao",
+			`${REMOTE_SERVER_ARG_PREFIX}not a server`,
+		]);
+
+		expect(bridge.remoteServer).toBeNull();
+		expect(bridge.capabilities.browserPanel).toBe(true);
 	});
 });

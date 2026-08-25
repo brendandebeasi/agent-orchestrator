@@ -26,6 +26,15 @@ export function createWindowComposition(options: {
 	mainWindow: MainWindowHost;
 	WebContentsView: WebContentsViewConstructor;
 	preload: string;
+	/**
+	 * Extra `process.argv` entries for the shell's preload.
+	 *
+	 * The only channel that gets a value into the preload before its first line
+	 * runs. Anything the renderer must know before its first query — remote
+	 * mode, so far — has to arrive this way, because IPC cannot answer earlier
+	 * than the first render and that is already too late.
+	 */
+	additionalArguments?: readonly string[];
 }): WindowComposition {
 	const shellView = new options.WebContentsView({
 		webPreferences: {
@@ -34,6 +43,9 @@ export function createWindowComposition(options: {
 			nodeIntegration: false,
 			sandbox: true,
 			transparent: true,
+			...(options.additionalArguments && options.additionalArguments.length > 0
+				? { additionalArguments: [...options.additionalArguments] }
+				: {}),
 		},
 	});
 	shellView.setBackgroundColor("#00000000");
