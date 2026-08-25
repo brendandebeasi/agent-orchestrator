@@ -7,65 +7,41 @@ import { fileURLToPath, URL } from "node:url";
 import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { DEFAULT_POSTHOG_HOST } from "./src/shared/posthog-config";
+import { posthogOrigins, rendererContentSecurityPolicy } from "./src/shared/content-security-policy";
+import { resolvePosthogHost } from "./src/shared/posthog-config";
 
-const POSTHOG_ORIGINS = (() => {
-	const configured = process.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
-	if (!configured) return [];
-	let url: URL;
-	try {
-		url = new URL(configured);
-	} catch {
-		return [];
-	}
-	// posthog-js serves capture from api_host but fetches remote config from a
-	// sibling "-assets" host it derives from the same name, so a CSP built only
-	// from api_host blocks that request and logs a console error on every launch
-	// of a packaged build. Capture is unaffected (it uses api_host), and AO
-	// ignores what remote config offers, since replay, flags, and surveys are all
-	// disabled in the client. Allowing the origin only silences the error; the
-	// client settings still win over anything the server would say.
-	//
-	// The asset_host option deliberately does not cover this: per its own docs it
-	// "only applies to /static/* asset paths; dynamic assets like remote config
-	// continue to use the regular asset host derived from api_host".
-	// Scoped to PostHog Cloud, matching what posthog-js itself does: it only
-	// rewrites to an "-assets" sibling for *.posthog.com. A self-hosted instance
-	// or a loopback capture endpoint serves everything from one origin, and
-	// deriving there would emit a nonsense entry (127.0.0.1 would become
-	// "127-assets.0.0.1").
-	const origins = [url.origin];
-	if (/\.posthog\.com$/i.test(url.hostname)) {
-		const assetsHost = url.hostname.replace(/^([^.]+)\./, "$1-assets.");
-		if (assetsHost !== url.hostname) origins.push(`${url.protocol}//${assetsHost}`);
-	}
-	return origins;
-})();
+// Set by `npm run build:web`: emit the bundle a daemon serves to a browser
+// rather than the one Electron loads from its own protocol. The two differ in
+// where their assets live and in what their content security policy has to
+// permit, and nothing else.
+const WEB_BUILD = process.env.AO_BUILD_TARGET === "web";
 
-// CSP for the built renderer. The daemon is loopback-only, so network access is
-// pinned to 127.0.0.1 (REST + SSE over http, terminal mux over ws). Injected at
-// build time rather than written into index.html because the dev server needs
-// inline scripts (react-refresh preamble) that a static meta tag would block.
-const CONTENT_SECURITY_POLICY = [
-	"default-src 'self'",
-	"script-src 'self'",
-	"style-src 'self' 'unsafe-inline'",
-	"img-src 'self' data: http://127.0.0.1:*",
-	"font-src 'self' data:",
-	["connect-src", "'self'", "http://127.0.0.1:*", "ws://127.0.0.1:*", ...POSTHOG_ORIGINS].filter(Boolean).join(" "),
-	"object-src 'none'",
-	"base-uri 'self'",
-	"frame-src 'none'",
-].join("; ");
+const POSTHOG_ORIGINS = posthogOrigins(resolvePosthogHost(process.env));
 
+// A browser client is served by the daemon it talks to, so its own origin is
+// the whole answer and a policy baked into the HTML is exactly right.
+//
+// The desktop client gets no meta tag at all. Its daemon may be on another
+// machine at an address that is not known when this bundle is built, so its
+// policy is written per launch by the main process and delivered as a response
+// header from the protocol handler that serves this HTML. A meta tag here would
+// be intersected with that header and the narrower one would win, which is to
+// say the feature would not work.
 const injectCspMeta: Plugin = {
 	name: "inject-csp-meta",
 	apply: "build",
 	transformIndexHtml() {
+		if (!WEB_BUILD) return [];
 		return [
 			{
 				tag: "meta",
-				attrs: { "http-equiv": "Content-Security-Policy", content: CONTENT_SECURITY_POLICY },
+				attrs: {
+					"http-equiv": "Content-Security-Policy",
+					content: rendererContentSecurityPolicy({
+						daemon: { kind: "sameOrigin" },
+						telemetry: POSTHOG_ORIGINS,
+					}),
+				},
 				injectTo: "head-prepend",
 			},
 		];
@@ -98,6 +74,20 @@ const productUiReactBoundary: Plugin = {
 };
 
 export default defineConfig({
+	// The daemon serves the browser client under /app/, keeping its own API and
+	// mux routes at the root, so the bundle cannot reference its assets from the
+	// root the way the desktop bundle does. Relative rather than a hard-coded
+	// "/app/" because it costs nothing here: the client uses hash history, so
+	// the document URL is always the directory itself and never a deep path that
+	// relative URLs would resolve against wrongly. In exchange the bundle works
+	// under whatever prefix it is mounted at, including behind a reverse proxy
+	// that adds one.
+	base: WEB_BUILD ? "./" : "/",
+	// Written straight into the directory the daemon embeds from, so producing
+	// the bundle and embedding it are one step rather than a build plus a copy
+	// nobody remembers to run. The directory ignores everything but its own
+	// markers, so no build output is ever committed.
+	build: WEB_BUILD ? { outDir: "../backend/internal/httpd/webclient", emptyOutDir: false } : {},
 	// "@/" → the renderer root (src/renderer), the shadcn/ui import convention.
 	resolve: {
 		alias: {

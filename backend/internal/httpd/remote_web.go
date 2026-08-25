@@ -17,6 +17,13 @@ import (
 // one subtree rather than a scattering of routes.
 const remoteWebAssetPrefix = "/app/"
 
+// remoteWebLoginPath is where a browser lands when an operator types the
+// daemon's address with nothing after it. It is the root rather than something
+// under the asset prefix because it is the one path a person can be expected to
+// arrive at without having been sent there, and the client sends them back to it
+// whenever it finds itself without a session.
+const remoteWebLoginPath = "/"
+
 // remoteWebSessionPath exchanges the connection password for the credential the
 // web client needs. It is the one route on the network listener that runs
 // before authMiddleware, because it is the route that authenticates.
@@ -82,7 +89,7 @@ func remoteWebEntry(state *authState, lock *lockout, opts remoteWebOptions) func
 			switch {
 			case r.URL.Path == remoteWebSessionPath && r.Method == http.MethodPost:
 				remoteWebSession(w, r, state, lock, opts)
-			case r.URL.Path == "/" && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+			case r.URL.Path == remoteWebLoginPath && (r.Method == http.MethodGet || r.Method == http.MethodHead):
 				remoteWebLogin(w, r, state)
 			default:
 				next.ServeHTTP(w, r)

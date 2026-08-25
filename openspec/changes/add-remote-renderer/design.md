@@ -339,6 +339,116 @@ no version to report — a daemon started from the CLI has no supervising app to
 from — the result is "unknown" and nothing is shown, since a missing version is not
 evidence of a mismatch.
 
+### D12. The content security policy stops being a build-time constant
+
+The renderer's policy was one string in `vite.renderer.config.ts`, injected as a `<meta>`
+tag at build time, pinning network access to `http://127.0.0.1:*` and `ws://127.0.0.1:*`.
+That was exactly right while every daemon was on loopback, and it is the single thing that
+would have made all of the above ship and then not work: a desktop client attached to
+`http://studio.local:3011` sends its first request and the page blocks it, with a console
+error and no failure the connection screen could report, because the request never left.
+This was not on the task list. It surfaced from asking what in the bundle still assumes
+the daemon is on this machine after `server-target.ts` no longer does.
+
+The policy now has three shapes, one per host, built by `src/shared/content-security-policy.ts`:
+
+- **Browser client.** Served by the daemon it talks to, so its own origin is the whole
+  answer and `connect-src 'self'` covers REST, SSE, and the mux. A build-time `<meta>` tag
+  is right here, and `AO_BUILD_TARGET=web` is what injects it.
+- **Desktop, local daemon.** The loopback range, as before — the port is chosen at runtime,
+  so the range is the tightest thing a policy can name.
+- **Desktop, remote daemon.** The server's origin plus its WebSocket origin. CSP counts
+  `http://host` and `ws://host` as different sources, so both are named; loopback stays
+  permitted alongside, because the client is still an Electron app on this machine with a
+  browser panel and an ACP runtime there.
+
+The desktop policy cannot be a `<meta>` tag, and this is the load-bearing part: the address
+comes from a setting written after the bundle was built, and a page carrying both a tag and
+a header gets the intersection of the two, so a tag naming only loopback would silently win
+over the header naming the server. The desktop build therefore emits no tag at all and
+`registerRendererProtocol` sets the header on the entry-point response — the only response
+where a policy means anything — recomputed per launch from the same `remoteMode` the
+lifecycle guards read.
+
+The one cost is that the telemetry host now has to be resolved identically in three places:
+the renderer, which sends; the renderer build, which writes the browser tag; and the main
+process, which writes the desktop header. They share `resolvePosthogHost`, and
+`vite.main.config.ts` inlines `VITE_AO_POSTHOG_HOST` into the main bundle from the same
+variable the renderer build reads, so the two halves of a packaged build cannot disagree
+about it.
+
+### D13. The login page hands the browser client its credential through session storage
+
+The login page and the client are two documents. The page authenticates, the daemon
+returns a token and sets `ao_web`, and then the page navigates to `/app/` and stops
+existing. The cookie survives that — it is what fetches the bundle — but it is scoped to
+`Path=/app/` precisely so it cannot be presented at `/api/v1`, which means the client
+cannot use it for anything and needs the token handed to it some other way.
+
+Session storage is the handoff. It is per-tab rather than per-browser, which is the
+property that matters: a second tab opened on the same daemon loads the app from the
+cookie and then finds no token, and going back to the login page is the correct response
+rather than an inherited session nobody authenticated for. It also clears when the tab
+closes, so the token's lifetime is the visit's.
+
+Three things follow from the page and the client being separate documents in separate
+languages:
+
+- **The keys are asserted equal across the two trees.**
+  `remote_web_session_keys_test.go` reads the real text of `remote-session.ts` and of the
+  login page and fails if the two key names, or the login path the client returns to, ever
+  disagree. Nothing else would catch it: rename one side and the page still serves, the
+  client still builds, and the symptom is a browser that logs in and bounces back to the
+  prompt forever.
+- **The client has to know which bundle it is.** A tab served by the daemon and a tab
+  served by vite's dev proxy are indistinguishable at runtime — same origin shape, same
+  absent preload — and the difference is entirely in what sits in front of the daemon. So
+  the build says: `VITE_AO_WEB_CLIENT=1` is set only by `build:web`.
+- **The redirect needs a seam.** `window.location` cannot be replaced or spied on in
+  jsdom, so the one-line `lib/navigate.ts` exists to be mocked. It has no other reason to
+  exist and says so.
+
+The daemon-served client is aimed as a *remote* target even though its server is its own
+origin, because "remote" here means "a daemon this client did not start" — which is what
+decides that host-bound features stay withdrawn and that readiness comes from the server
+rather than from a local supervisor there isn't one of.
+
+### D14. Changing servers relaunches, and the way in is a settings row
+
+Two gaps closed together, because the second one is what exposed the first.
+
+The way in: nothing pointed a client at a server. The connection screen mounts when the
+server target reports a credential prompt, and only a client already aimed somewhere can
+report one, so a fresh install could reach remote mode through `AO_REMOTE_SERVER` and no
+other way. That is a fine escape hatch and a poor front door. `ServerSettingsSection` puts
+the current server's name in General settings with a button that opens the same screen,
+which now takes an `onCancel` — the original screen had nothing behind it and correctly
+offered no way out, and opened on purpose it does.
+
+The bug: `remoteMode:set` relaunched only when a remote client asked for a local daemon,
+on the reasoning that the daemon lifecycle is resolved once per launch and cannot be
+changed underneath a running process. True, and half the story. The page is also loaded
+once, under a policy that names one server (D12), so a client that started local and was
+re-aimed at a server would block its first request to it before the request left the
+page — no network error, no failure the connection screen could report, nothing but a
+console nobody has open. Any change of server now relaunches:
+
+```
+relaunching = server !== (remoteMode?.baseUrl ?? null)
+              && !overriddenByEnv
+```
+
+The environment override still suppresses it, because a relaunch that comes back to the
+same place is a flicker with no result. The screen names which control it is restarting
+for, since both buttons can now provoke one and only the pressed one should say so.
+
+This makes a relaunch a routine part of using the feature rather than an edge case, which
+is worth the cost it carries: sessions on the old server keep running (that is D3's
+detachment working), but this client's window state goes and comes back. The alternative
+is a client that reloads its own document with a new policy, which Electron has no clean
+way to do without recreating the window and re-resolving the setting — which is a
+relaunch with extra steps and more places to be wrong.
+
 ## Risks / Trade-offs
 
 - **Unblocking any part of `/api/v1/desktop` widens the surface for every existing

@@ -3,12 +3,12 @@ import { aoBridge } from "./bridge";
 import { isLoopbackHostname } from "./loopback";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { KNOWN_REVIEWER_HARNESS_IDS } from "./reviewer-harnesses";
-import { DEFAULT_POSTHOG_HOST, DEFAULT_POSTHOG_PROJECT_KEY } from "../../shared/posthog-config";
+import { DEFAULT_POSTHOG_PROJECT_KEY, resolvePosthogHost } from "../../shared/posthog-config";
 import { EDITOR_IDS } from "../../shared/editor-handoff";
 import { captureExceptionToSentry, initSentry } from "./sentry";
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
-const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
+const POSTHOG_HOST = resolvePosthogHost(import.meta.env);
 const RELEASE_TAG = "2026-01-30";
 const TELEMETRY_SCHEMA_VERSION = 2;
 const REDACTED_LOCAL_URL = "[redacted-local-url]";

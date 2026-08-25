@@ -1,7 +1,7 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { SavedServer } from "../../shared/remote-server";
+import type { RemoteModeChange, SavedServer } from "../../shared/remote-server";
 import { getServerTarget, setLocalServerTarget } from "../lib/server-target";
 import { resetServerConnectionForTest } from "../lib/server-connection";
 import { resetRemoteServersStoreForTest, useRemoteServersStore } from "../stores/remote-servers-store";
@@ -33,7 +33,7 @@ const host = vi.hoisted(() => ({
 	remoteServer: null as string | null,
 	remoteMode: {
 		get: vi.fn(async () => null),
-		set: vi.fn(async (_baseUrl: string | null) => ({
+		set: vi.fn(async (_baseUrl: string | null): Promise<RemoteModeChange> => ({
 			server: null,
 			relaunching: false,
 			overriddenByEnv: false,
@@ -151,6 +151,65 @@ describe("connecting to a server", () => {
 
 		await screen.findByText(/Nothing answered at that address/);
 		expect(host.remoteMode.set).not.toHaveBeenCalled();
+	});
+
+	// A client that was talking to somewhere else has a page loaded under a
+	// content security policy naming the old server, which would block every
+	// request to the new one before it left the page. The host restarts for
+	// that, and the screen has to say so: the alternative is a window that goes
+	// unresponsive for a moment and then disappears, which reads as a crash.
+	it("says the restart is coming when the host has to come back as a different launch", async () => {
+		fetchMock.mockResolvedValue(daemonAnswer());
+		host.remoteMode.set.mockResolvedValue({
+			server: "http://box:3010",
+			relaunching: true,
+			overriddenByEnv: false,
+		});
+		const onConnected = vi.fn();
+		render(<ConnectServerScreen onConnected={onConnected} />);
+
+		await fillAndSubmit("box:3010", "hunter2");
+
+		await screen.findByRole("button", { name: "Restarting…" });
+		// Nothing is handed back to the caller, because there is no client left
+		// to hand it to: dismissing a screen over a window that is on its way
+		// out would show the operator a board that is about to vanish.
+		expect(onConnected).not.toHaveBeenCalled();
+	});
+});
+
+/**
+ * Reached deliberately from settings rather than because the client lost its
+ * password. The difference is that there is a working client behind the screen,
+ * which is the one thing that makes backing out of it meaningful.
+ */
+describe("changing servers on purpose", () => {
+	it("offers a way back only when there is something to go back to", async () => {
+		const onCancel = vi.fn();
+		const { unmount } = render(<ConnectServerScreen onCancel={onCancel} />);
+		await userEvent.setup().click(screen.getByRole("button", { name: "Cancel" }));
+		expect(onCancel).toHaveBeenCalledTimes(1);
+
+		unmount();
+		render(<ConnectServerScreen />);
+		expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+	});
+
+	it("cannot be backed out of while the host is restarting into the new server", async () => {
+		fetchMock.mockResolvedValue(daemonAnswer());
+		host.remoteMode.set.mockResolvedValue({
+			server: "http://box:3010",
+			relaunching: true,
+			overriddenByEnv: false,
+		});
+		render(<ConnectServerScreen onCancel={vi.fn()} />);
+
+		await fillAndSubmit("box:3010", "hunter2");
+
+		await screen.findByRole("button", { name: "Restarting…" });
+		// The setting is already written and the process is already leaving.
+		// A cancel here would not undo either; it would only mislead.
+		expect(screen.getByRole("button", { name: "Cancel" })).toBeDisabled();
 	});
 });
 

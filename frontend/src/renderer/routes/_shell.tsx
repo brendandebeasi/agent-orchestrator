@@ -125,6 +125,8 @@ function ShellLayout() {
 	const requestNewShellTerminal = useUiStore((state) => state.requestNewShellTerminal);
 	const newShellTerminalNonce = useUiStore((state) => state.newShellTerminalNonce);
 	const setActiveShellTerminal = useUiStore((state) => state.setActiveShellTerminal);
+	const isServerPickerOpen = useUiStore((state) => state.isServerPickerOpen);
+	const setServerPickerOpen = useUiStore((state) => state.setServerPickerOpen);
 	const openShellTerminal = useOpenShellTerminal();
 	// Session surfaces publish only their required center-workspace width. The
 	// persistent shell owns the single responsive decision, measured against the
@@ -744,11 +746,19 @@ function ShellLayout() {
 	// state is simply that nobody has typed a password yet. This is the mount
 	// task 4.5 deferred: discarding the credential on a 401 keeps the address,
 	// so what comes back is this prompt and not a request to retype it.
-	if (serverConnection.credentialPrompt !== null) {
+	//
+	// The same screen is also how an operator changes servers on purpose, from
+	// settings. The two cases differ only in whether there is anything to go
+	// back to: a client with no working credential has nothing behind the
+	// screen, so it gets no cancel.
+	if (serverConnection.credentialPrompt !== null || isServerPickerOpen) {
+		const prompted = serverConnection.credentialPrompt !== null;
 		return (
 			<ConnectServerScreen
 				initialAddress={serverConnection.baseUrl ?? ""}
 				initialProblem={serverConnection.credentialPrompt === "rejected" ? { outcome: "rejected" } : null}
+				onCancel={prompted ? undefined : () => setServerPickerOpen(false)}
+				onConnected={() => setServerPickerOpen(false)}
 			/>
 		);
 	}

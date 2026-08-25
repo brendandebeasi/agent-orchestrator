@@ -120,6 +120,8 @@
 	"connectServer.remember": "Remember this server and password",
 	"connectServer.connect": "Connect",
 	"connectServer.connecting": "Connecting…",
+	"connectServer.restarting": "Restarting…",
+	"connectServer.cancel": "Cancel",
 	"connectServer.useLocal": "Use this computer instead",
 	"connectServer.useLocalRestarting": "Restarting…",
 	"connectServer.useLocalHint": "Restarts this app and runs a server on this computer. The remote server keeps running.",
@@ -1320,5 +1322,9 @@
 	"inspector.usage.processedTokens": "Tokens processed",
 	"inspector.usage.processedTokensAria": "{{count}} tokens processed",
 	"inspector.usage.processedTokensUnavailable": "Processed tokens unavailable",
-	"settings.project.reviewer": "Reviewer"
+	"settings.project.reviewer": "Reviewer",
+	"settings.server": "Server",
+	"settings.server.label": "Talking to",
+	"settings.server.change": "Change…",
+	"settings.server.hint": "The computer that runs Agent Orchestrator and holds your code. Changing it restarts this app."
 }

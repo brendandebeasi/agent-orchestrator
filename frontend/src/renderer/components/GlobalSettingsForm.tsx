@@ -6,6 +6,7 @@ import { ConnectMobileContent } from "./settings/ConnectMobileContent";
 import { KeyboardShortcutsContent } from "./settings/KeyboardShortcutsContent";
 import { MobileDevicesSection } from "./settings/MobileDevicesSection";
 import { ReportProblemContent } from "./settings/ReportProblemContent";
+import { ServerSettingsSection } from "./settings/ServerSettingsSection";
 import { SettingsSection } from "./settings/SettingsSection";
 
 const UpdatesSection = lazy(async () => {
@@ -38,7 +39,15 @@ export function GlobalSettingsForm({
 			className="flex w-full flex-col gap-(--size-settings-section-gap)"
 			data-testid="settings-page"
 		>
-			{(all || section === "general") && <GeneralSettingsSection titleHidden={titleHidden} />}
+			{(all || section === "general") && (
+				<>
+					<GeneralSettingsSection titleHidden={titleHidden} />
+					{/* Keeps its heading even on the single-section page: General
+					    already ends in several titled groups, and an untitled one
+					    after them would read as more appearance settings. */}
+					<ServerSettingsSection />
+				</>
+			)}
 
 			{(all || section === "mobile") && (
 				<SettingsSection title={t("settings.mobile")} titleHidden={titleHidden}>

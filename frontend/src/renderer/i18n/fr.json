@@ -121,6 +121,8 @@
 	"connectServer.remember": "Mémoriser ce serveur et ce mot de passe",
 	"connectServer.connect": "Se connecter",
 	"connectServer.connecting": "Connexion…",
+	"connectServer.restarting": "Redémarrage…",
+	"connectServer.cancel": "Annuler",
 	"connectServer.useLocal": "Utiliser cet ordinateur à la place",
 	"connectServer.useLocalRestarting": "Redémarrage…",
 	"connectServer.useLocalHint": "Redémarre cette application et exécute un serveur sur cet ordinateur. Le serveur distant continue de fonctionner.",
@@ -1354,5 +1356,9 @@
 	"settings.project.autoReview": "Auto review",
 	"settings.project.autoReviewToggle": "Auto review PRs",
 	"settings.project.autoReviewDescription": "When enabled, new worker sessions will automatically review their pull requests. This can still be toggled per session after spawn.",
-	"settings.project.reviewer": "Reviewer"
+	"settings.project.reviewer": "Reviewer",
+	"settings.server": "Serveur",
+	"settings.server.label": "Connecté à",
+	"settings.server.change": "Modifier…",
+	"settings.server.hint": "L’ordinateur qui exécute Agent Orchestrator et contient votre code. Le changer redémarre cette application."
 }

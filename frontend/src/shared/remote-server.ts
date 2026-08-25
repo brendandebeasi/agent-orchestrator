@@ -127,14 +127,16 @@ export function remoteServerFromArgv(argv: readonly string[]): string | null {
  * should attach to.
  *
  * The two extra fields exist because writing the setting is not always the
- * whole answer. Remote mode is resolved once per launch and every daemon path
- * branches on it, so the process cannot change its mind — and the one change
- * that cannot wait is a remote client choosing this computer, because this
- * process will not start a daemon no matter what the file says. The host
- * relaunches for that case and says so here. `overriddenByEnv` is the opposite
- * problem: the setting was written and the next launch will ignore it, because
- * `AO_REMOTE_SERVER` is in the environment and an override that could be edited
- * away from the UI would not be one.
+ * whole answer. Remote mode is resolved once per launch: the daemon lifecycle
+ * branches on it, and the page was loaded under a content security policy that
+ * names the server it was resolved to. Neither survives being changed underneath
+ * a running process — a client that started remote will not spawn a daemon
+ * however the file reads, and one that started local has a policy that blocks
+ * its first request to anywhere else. So any actual change of server relaunches,
+ * and says so here. `overriddenByEnv` is the opposite problem: the setting was
+ * written and the next launch will ignore it, because `AO_REMOTE_SERVER` is in
+ * the environment and an override that could be edited away from the UI would
+ * not be one.
  */
 export type RemoteModeChange = {
 	/** The address now recorded, or null when the next launch runs its own daemon. */

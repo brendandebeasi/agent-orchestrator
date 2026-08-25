@@ -1,8 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { readCredentialMock, setApiBaseUrlMock } = vi.hoisted(() => ({
+const { readCredentialMock, setApiBaseUrlMock, replaceLocationMock } = vi.hoisted(() => ({
 	readCredentialMock: vi.fn(),
 	setApiBaseUrlMock: vi.fn(),
+	replaceLocationMock: vi.fn(),
 }));
 
 /**
@@ -11,8 +12,12 @@ const { readCredentialMock, setApiBaseUrlMock } = vi.hoisted(() => ({
  * launch arguments, and whether there is an Electron host at all. So each case
  * loads the module against the host it is about, rather than toggling one.
  */
-async function loadFor(host: { remoteServer: string | null; hasElectronHost: boolean }) {
+async function loadFor(host: { remoteServer: string | null; hasElectronHost: boolean; webClient?: boolean }) {
 	vi.resetModules();
+	// The one host fact the build decides rather than the launch: whether this
+	// bundle is the one a daemon serves at /app/, which has a credential waiting
+	// for it, or the one vite's dev server serves, which does not.
+	vi.stubEnv("VITE_AO_WEB_CLIENT", host.webClient ? "1" : "");
 	vi.doMock("./bridge", () => ({
 		hasElectronHost: host.hasElectronHost,
 		aoBridge: {
@@ -28,6 +33,10 @@ async function loadFor(host: { remoteServer: string | null; hasElectronHost: boo
 		setApiBaseUrl: setApiBaseUrlMock,
 		setApiDaemonStatus: vi.fn(),
 	}));
+	// `window.location` is unforgeable, so leaving the page is reachable only
+	// through the module that wraps it. That is the module's entire reason to
+	// exist; see lib/navigate.ts.
+	vi.doMock("./navigate", () => ({ replaceLocation: replaceLocationMock }));
 	const bootstrap = await import("./remote-bootstrap");
 	const serverTarget = await import("./server-target");
 	return { ...bootstrap, ...serverTarget };
@@ -46,13 +55,18 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
 beforeEach(() => {
 	readCredentialMock.mockReset().mockResolvedValue(null);
 	setApiBaseUrlMock.mockReset();
+	replaceLocationMock.mockReset();
 	vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(DAEMON_BODY)));
 });
 
 afterEach(() => {
 	vi.unstubAllGlobals();
+	vi.unstubAllEnvs();
+	vi.restoreAllMocks();
+	window.sessionStorage.clear();
 	vi.doUnmock("./bridge");
 	vi.doUnmock("./api-client");
+	vi.doUnmock("./navigate");
 	vi.resetModules();
 });
 
@@ -80,6 +94,110 @@ describe("a page served over HTTP", () => {
 		await aimAtConfiguredServer();
 
 		expect(setApiBaseUrlMock).toHaveBeenCalledWith(window.location.origin);
+	});
+
+	it("presents no credential, because the dev proxy fronts a daemon that wants none", async () => {
+		// `npm run dev:web` and the daemon-served bundle are the same code in the
+		// same shape of browser, and only the build distinguishes them. Aiming
+		// the dev build at a credentialed target would make it demand a password
+		// for a loopback daemon that has none to check.
+		const { aimAtConfiguredServer, getServerTarget } = await loadFor({
+			remoteServer: null,
+			hasElectronHost: false,
+		});
+
+		await aimAtConfiguredServer();
+
+		expect(getServerTarget().kind).toBe("local");
+	});
+});
+
+describe("a tab the daemon served itself", () => {
+	it("uses the credential its login page left behind", async () => {
+		window.sessionStorage.setItem("ao.remote.token", "hunter2");
+		const { aimAtConfiguredServer, getServerTarget, getServerCredential, serverCredentialPrompt } = await loadFor({
+			remoteServer: null,
+			hasElectronHost: false,
+			webClient: true,
+		});
+
+		await aimAtConfiguredServer();
+
+		// Remote, though the daemon is at this tab's own origin: "remote" here
+		// means a daemon this client did not start, which is what keeps the
+		// host-bound features withdrawn and readiness answered by the server.
+		expect(getServerTarget()).toMatchObject({
+			kind: "remote",
+			baseUrl: window.location.origin,
+			requiresAuth: true,
+		});
+		expect(getServerCredential()).toBe("hunter2");
+		expect(serverCredentialPrompt()).toBeNull();
+	});
+
+	it("takes the server's version from the exchange rather than repeating the handshake", async () => {
+		window.sessionStorage.setItem("ao.remote.token", "hunter2");
+		window.sessionStorage.setItem("ao.remote.serverVersion", "1.4.2");
+		const { aimAtConfiguredServer } = await loadFor({
+			remoteServer: null,
+			hasElectronHost: false,
+			webClient: true,
+		});
+		const { getServerConnection } = await import("./server-connection");
+
+		await aimAtConfiguredServer();
+
+		expect(getServerConnection().versions.server).toBe("1.4.2");
+	});
+
+	it("reports the version as unknown when the daemon was launched by no app", async () => {
+		// A daemon started from the CLI has no app version to report, and the
+		// login page stores the empty string it got back. Comparing that against
+		// a real client version would warn about a mismatch that is not one.
+		window.sessionStorage.setItem("ao.remote.token", "hunter2");
+		window.sessionStorage.setItem("ao.remote.serverVersion", "");
+		const { aimAtConfiguredServer } = await loadFor({
+			remoteServer: null,
+			hasElectronHost: false,
+			webClient: true,
+		});
+		const { getServerConnection } = await import("./server-connection");
+
+		await aimAtConfiguredServer();
+
+		expect(getServerConnection().versions.server).toBeNull();
+	});
+
+	it("goes back to the login page when the tab has no session of its own", async () => {
+		// The ordinary state of a second tab: the asset cookie belongs to the
+		// browser, so the app loads, but the token belongs to the tab that
+		// exchanged the password and this one has none.
+		const { aimAtConfiguredServer, getServerCredential } = await loadFor({
+			remoteServer: null,
+			hasElectronHost: false,
+			webClient: true,
+		});
+
+		await aimAtConfiguredServer();
+
+		expect(replaceLocationMock).toHaveBeenCalledWith("/");
+		expect(getServerCredential()).toBeNull();
+	});
+
+	it("treats a storage that throws as no session rather than failing the launch", async () => {
+		// Safari's private mode and some enterprise policies make this property
+		// access raise. The recovery for "no session" is the right one either way.
+		vi.spyOn(window.sessionStorage, "getItem").mockImplementation(() => {
+			throw new Error("access denied");
+		});
+		const { aimAtConfiguredServer } = await loadFor({
+			remoteServer: null,
+			hasElectronHost: false,
+			webClient: true,
+		});
+
+		await expect(aimAtConfiguredServer()).resolves.toBeUndefined();
+		expect(replaceLocationMock).toHaveBeenCalledWith("/");
 	});
 });
 

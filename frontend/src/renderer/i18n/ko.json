@@ -120,6 +120,8 @@
 	"connectServer.remember": "이 서버와 비밀번호 기억하기",
 	"connectServer.connect": "연결",
 	"connectServer.connecting": "연결 중…",
+	"connectServer.restarting": "다시 시작하는 중…",
+	"connectServer.cancel": "취소",
 	"connectServer.useLocal": "대신 이 컴퓨터 사용",
 	"connectServer.useLocalRestarting": "다시 시작하는 중…",
 	"connectServer.useLocalHint": "이 앱을 다시 시작하고 이 컴퓨터에서 서버를 실행합니다. 원격 서버는 계속 실행됩니다.",
@@ -1338,5 +1340,9 @@
 	"settings.project.autoReview": "Auto review",
 	"settings.project.autoReviewToggle": "Auto review PRs",
 	"settings.project.autoReviewDescription": "When enabled, new worker sessions will automatically review their pull requests. This can still be toggled per session after spawn.",
-	"settings.project.reviewer": "Reviewer"
+	"settings.project.reviewer": "Reviewer",
+	"settings.server": "서버",
+	"settings.server.label": "연결 대상",
+	"settings.server.change": "변경…",
+	"settings.server.hint": "Agent Orchestrator를 실행하고 코드를 보관하는 컴퓨터입니다. 변경하면 앱이 다시 시작됩니다."
 }

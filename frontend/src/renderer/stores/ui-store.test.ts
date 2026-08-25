@@ -62,3 +62,33 @@ describe("sidebar workspace pressure", () => {
 		expect(sidebarIsVisible(state)).toBe(true);
 	});
 });
+
+describe("choosing which server to talk to", () => {
+	beforeEach(() => {
+		useUiStore.setState({ isServerPickerOpen: false, settingsModal: null });
+	});
+
+	// The picker takes the whole window. A settings dialog left open underneath
+	// it would be sitting there when the operator cancels, describing a client
+	// that may by then be talking to a different machine than the one whose
+	// settings it was showing.
+	it("takes the settings dialog down with it, since it is opened from inside one", () => {
+		useUiStore.getState().openGlobalSettings("general");
+		useUiStore.getState().setServerPickerOpen(true);
+
+		const state = useUiStore.getState();
+		expect(state.isServerPickerOpen).toBe(true);
+		expect(state.settingsModal).toBeNull();
+	});
+
+	// Closing is the operator backing out, and re-opening the dialog they were
+	// last in would be answering a question they did not ask.
+	it("leaves the dialog closed on the way back out", () => {
+		useUiStore.getState().setServerPickerOpen(true);
+		useUiStore.getState().setServerPickerOpen(false);
+
+		const state = useUiStore.getState();
+		expect(state.isServerPickerOpen).toBe(false);
+		expect(state.settingsModal).toBeNull();
+	});
+});

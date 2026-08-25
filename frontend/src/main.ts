@@ -114,6 +114,8 @@ import { ancestorRepositorySetupWarning, scanImportFolder } from "./main/import-
 import { parseOpenFolderPathArg } from "./main/open-folder-arg";
 import { readRemoteModeSetting, REMOTE_SERVER_ENV, resolveRemoteServer, writeRemoteModeSetting, type RemoteMode } from "./main/remote-mode";
 import { REMOTE_SERVER_ARG_PREFIX, type RemoteModeChange } from "./shared/remote-server";
+import { posthogOrigins, rendererContentSecurityPolicy } from "./shared/content-security-policy";
+import { resolvePosthogHost } from "./shared/posthog-config";
 
 // Globals injected at compile time by @electron-forge/plugin-vite.
 declare const MAIN_WINDOW_VITE_DEV_SERVER_URL: string | undefined;
@@ -289,10 +291,28 @@ if (!app.requestSingleInstanceLock()) {
 	app.exit(0);
 }
 
+// The content security policy for the page this launch is about to load.
+//
+// Written here rather than baked into the HTML because the one thing it has to
+// permit — reaching the daemon — is only known now. An ordinary launch starts a
+// daemon on loopback at a port chosen at runtime; a remote launch attaches to an
+// address the operator wrote into a setting, which no build could have known.
+// The renderer build therefore emits no <meta> tag for the desktop bundle: a tag
+// and a header are intersected, and the tag, naming only loopback, would win.
+function desktopContentSecurityPolicy(): string {
+	return rendererContentSecurityPolicy({
+		daemon: remoteMode ? { kind: "remote", baseUrl: remoteMode.baseUrl } : { kind: "loopback" },
+		// Inlined by vite.main.config.ts from the same variable the renderer build
+		// reads, so the policy names the host the bundle will actually send to.
+		telemetry: posthogOrigins(resolvePosthogHost({ VITE_AO_POSTHOG_HOST: process.env.VITE_AO_POSTHOG_HOST })),
+	});
+}
+
 // Maps app://renderer/<path> to the built renderer in dist/. Paths without a
 // file extension are client-side routes and fall back to index.html (SPA).
 function registerRendererProtocol(): void {
 	const distRoot = path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}`);
+	const entryPoint = path.join(distRoot, "index.html");
 	protocol.handle(RENDERER_SCHEME, async (request) => {
 		const url = new URL(request.url);
 		if (url.host !== RENDERER_HOST) {
@@ -302,9 +322,16 @@ function registerRendererProtocol(): void {
 		if (resolved !== distRoot && !resolved.startsWith(distRoot + path.sep)) {
 			return new Response("Forbidden", { status: 403 });
 		}
-		const target = path.extname(resolved) === "" ? path.join(distRoot, "index.html") : resolved;
+		const target = path.extname(resolved) === "" ? entryPoint : resolved;
 		try {
-			return await net.fetch(pathToFileURL(target).toString());
+			const response = await net.fetch(pathToFileURL(target).toString());
+			// Only the document carries the policy. A policy header on a script or a
+			// stylesheet governs nothing, since the rules that matter are the ones
+			// the page was loaded under.
+			if (target !== entryPoint) return response;
+			const headers = new Headers(response.headers);
+			headers.set("Content-Security-Policy", desktopContentSecurityPolicy());
+			return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 		} catch {
 			return new Response("Not found", { status: 404 });
 		}
@@ -1757,14 +1784,25 @@ ipcMain.handle("remoteMode:set", async (event, baseUrl: string | null) => {
 	assertShellSender(event, "remote mode");
 	const server = await writeRemoteModeSetting(editorStateDir(), typeof baseUrl === "string" ? baseUrl : null);
 	const overriddenByEnv = process.env[REMOTE_SERVER_ENV] !== undefined;
-	// A launch that is already remote cannot be talked into running a daemon:
-	// the decision was made before the window existed and half the daemon
-	// lifecycle is branched on it. Relaunching is what actually gives the
-	// operator the local daemon they just asked for. Deferred past the reply so
-	// the renderer learns what is about to happen before it happens; a launch
-	// whose remote mode came from the environment would come back remote, so
-	// restarting it would be a pointless flicker.
-	const relaunching = remoteMode !== null && server === null && !overriddenByEnv;
+	// Any change of server needs a new process, in both directions.
+	//
+	// Going back to a local daemon is the obvious half: the decision was made
+	// before the window existed and half the daemon lifecycle is branched on it,
+	// so a launch that started remote cannot be talked into spawning one.
+	//
+	// Going *out* to a server needs it for a quieter reason: this launch's page
+	// was loaded under a content security policy naming loopback and nothing
+	// else, written when the entry point was served. Re-aiming the client
+	// without reloading it leaves every request to the new server blocked before
+	// it leaves the page — no network error, no failure the connection screen
+	// could report, just a console the operator will never open. The policy is
+	// per-document, so only a fresh document can carry a different one.
+	//
+	// Deferred past the reply so the renderer learns what is about to happen
+	// before it happens; a launch whose remote mode came from the environment
+	// would come back to the same place, so restarting it would be a pointless
+	// flicker.
+	const relaunching = server !== (remoteMode?.baseUrl ?? null) && !overriddenByEnv;
 	if (relaunching) {
 		setTimeout(() => {
 			app.relaunch();

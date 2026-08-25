@@ -121,8 +121,8 @@ const remoteServer = remoteServerFromArgv(process.argv);
  * local run file and connects to over loopback; with no local daemon there is no
  * run file, no address, and nothing to connect to. The other three stay declared
  * true and are withdrawn a layer up by the server target, which is the honest
- * split: they are wired, they are just aimed at the wrong machine, and the
- * operator can change which machine that is without relaunching.
+ * split: they are wired, they are just aimed at the wrong machine, and which
+ * machine that is belongs to the server target rather than to the host.
  */
 const hostCapabilities: HostCapabilities =
 	remoteServer === null ? ALL_HOST_CAPABILITIES : { ...ALL_HOST_CAPABILITIES, browserPanel: false };

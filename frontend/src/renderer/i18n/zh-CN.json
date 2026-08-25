@@ -120,6 +120,8 @@
 	"connectServer.remember": "记住此服务器和密码",
 	"connectServer.connect": "连接",
 	"connectServer.connecting": "正在连接…",
+	"connectServer.restarting": "正在重启…",
+	"connectServer.cancel": "取消",
 	"connectServer.useLocal": "改用这台计算机",
 	"connectServer.useLocalRestarting": "正在重启…",
 	"connectServer.useLocalHint": "重启此应用并在这台计算机上运行服务器。远程服务器将继续运行。",
@@ -1320,5 +1322,9 @@
 	"settings.project.autoReview": "Auto review",
 	"settings.project.autoReviewToggle": "Auto review PRs",
 	"settings.project.autoReviewDescription": "When enabled, new worker sessions will automatically review their pull requests. This can still be toggled per session after spawn.",
-	"settings.project.reviewer": "Reviewer"
+	"settings.project.reviewer": "Reviewer",
+	"settings.server": "服务器",
+	"settings.server.label": "当前连接",
+	"settings.server.change": "更改…",
+	"settings.server.hint": "运行 Agent Orchestrator 并存放你代码的计算机。更改后会重启此应用。"
 }

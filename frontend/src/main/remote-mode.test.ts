@@ -182,4 +182,31 @@ describe("the daemon lifecycle in main.ts", () => {
 			/additionalArguments: remoteMode \? \[`\$\{REMOTE_SERVER_ARG_PREFIX\}\$\{remoteMode\.baseUrl\}`\] : \[\]/,
 		);
 	});
+
+	/**
+	 * The packaged client's content security policy, which is the difference
+	 * between remote mode working and remote mode failing invisibly.
+	 *
+	 * The renderer is served from a custom protocol, so nothing sets this header
+	 * unless the handler does. A policy that names only loopback blocks every
+	 * request a remote client makes, before it leaves the page: no network error
+	 * to catch, no failure the connection screen could report. Development is no
+	 * warning either, since the vite dev server sends no policy at all.
+	 */
+	it("names this launch's server in the policy it serves the document under", () => {
+		const policy = bodyOf("desktopContentSecurityPolicy");
+		expect(policy).toMatch(/daemon: remoteMode \? \{ kind: "remote", baseUrl: remoteMode\.baseUrl \} : \{ kind: "loopback" \}/);
+		expect(bodyOf("registerRendererProtocol")).toMatch(
+			/headers\.set\("Content-Security-Policy", desktopContentSecurityPolicy\(\)\)/,
+		);
+	});
+
+	it("relaunches on any change of server, not only on the way back to this computer", () => {
+		// Both directions need a new document: one to get a daemon started, the
+		// other to get a policy that permits the server just chosen.
+		const handler = MAIN_SOURCE.slice(MAIN_SOURCE.indexOf('ipcMain.handle("remoteMode:set"'));
+		expect(handler.slice(0, handler.indexOf("\n});"))).toMatch(
+			/^\tconst relaunching = server !== \(remoteMode\?\.baseUrl \?\? null\) && !overriddenByEnv;$/m,
+		);
+	});
 });

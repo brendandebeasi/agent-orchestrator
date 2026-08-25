@@ -120,6 +120,8 @@
 	"connectServer.remember": "Diesen Server und das Passwort merken",
 	"connectServer.connect": "Verbinden",
 	"connectServer.connecting": "Verbinden…",
+	"connectServer.restarting": "Wird neu gestartet…",
+	"connectServer.cancel": "Abbrechen",
 	"connectServer.useLocal": "Stattdessen diesen Computer verwenden",
 	"connectServer.useLocalRestarting": "Neustart…",
 	"connectServer.useLocalHint": "Startet diese App neu und betreibt einen Server auf diesem Computer. Der entfernte Server läuft weiter.",
@@ -1338,5 +1340,9 @@
 	"settings.project.autoReview": "Auto review",
 	"settings.project.autoReviewToggle": "Auto review PRs",
 	"settings.project.autoReviewDescription": "When enabled, new worker sessions will automatically review their pull requests. This can still be toggled per session after spawn.",
-	"settings.project.reviewer": "Reviewer"
+	"settings.project.reviewer": "Reviewer",
+	"settings.server": "Server",
+	"settings.server.label": "Verbunden mit",
+	"settings.server.change": "Ändern…",
+	"settings.server.hint": "Der Computer, auf dem Agent Orchestrator läuft und Ihr Code liegt. Eine Änderung startet diese App neu."
 }

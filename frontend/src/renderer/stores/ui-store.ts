@@ -66,6 +66,14 @@ export type UiState = {
 	themeStyle: ThemeStyle;
 	/** When true, developer-only release controls are available. Default off. */
 	developerMode: boolean;
+	/**
+	 * The operator asked to change which server this client talks to.
+	 *
+	 * Not persisted and not part of the URL: it is a question being asked, and a
+	 * client that came back from a restart still asking it would be asking about
+	 * a decision it has already carried out.
+	 */
+	isServerPickerOpen: boolean;
 	restartingProjectIds: ReadonlySet<string>;
 	orchestratorReplacementErrors: Record<string, OrchestratorReplacementFailure>;
 	orchestratorStartupErrors: Record<string, string>;
@@ -103,6 +111,7 @@ export type UiState = {
 	setThemePreference: (theme: ThemePreference) => void;
 	setThemeStyle: (style: ThemeStyle) => void;
 	setDeveloperMode: (enabled: boolean) => void;
+	setServerPickerOpen: (open: boolean) => void;
 	openGlobalSettings: (section?: GlobalSettingsSection) => void;
 	openProjectSettings: (projectId: string) => void;
 	closeSettings: () => void;
@@ -198,6 +207,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	resolvedTheme: resolveTheme(initialThemePreference),
 	themeStyle: initialThemeStyle,
 	developerMode: initialDeveloperMode(),
+	isServerPickerOpen: false,
 	restartingProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},
 	orchestratorStartupErrors: {},
@@ -229,6 +239,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 		getLocalStorage()?.setItem(developerModeStorageKey, String(developerMode));
 		set({ developerMode });
 	},
+	// Closes the settings dialog on the way, because the picker takes the whole
+	// window and a dialog left open behind it would be waiting there when the
+	// operator cancels, over a client that may by then be talking to a different
+	// machine than the one whose settings it was showing.
+	setServerPickerOpen: (isServerPickerOpen) =>
+		set(isServerPickerOpen ? { isServerPickerOpen, settingsModal: null } : { isServerPickerOpen }),
 	openGlobalSettings: (section) => set({ settingsModal: { scope: "global", section } }),
 	openProjectSettings: (projectId) => set({ settingsModal: { scope: "project", projectId } }),
 	closeSettings: () => set({ settingsModal: null }),

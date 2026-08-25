@@ -83,6 +83,10 @@ vi.mock("../lib/bridge", () => ({
 		},
 		featureBuilds: { list: featListBuilds, getActive: featGetActive },
 	},
+	// This suite is the desktop settings page, so it renders with a host. The
+	// server row reads this to decide whether "which server" is a question it can
+	// answer; a browser tab's answer is its own URL bar.
+	hasElectronHost: true,
 }));
 
 function renderForm() {
@@ -161,6 +165,7 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByText("Language")).toBeInTheDocument();
 		expect(await screen.findByText("Updates")).toBeInTheDocument();
 		expect(screen.getByText("Advanced")).toBeInTheDocument();
+		expect(screen.getByText("Server")).toBeInTheDocument();
 		expect(screen.getByText("Report a problem")).toBeInTheDocument();
 		// Report form is inline — no dialog, fields directly present.
 		expect(screen.getByLabelText("Title")).toBeInTheDocument();

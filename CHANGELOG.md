@@ -43,8 +43,20 @@ at https://github.com/Untrivial-ai/agent-orchestrator/releases.
   the question is asked once; `AO_REMOTE_SERVER` overrides the setting for a single
   launch. Such a client starts no daemon, attaches to none already running, and — the
   point of the whole thing on a shared machine — takes none down when it quits. Going back
-  to a local daemon is a button on the connection screen, which clears the setting and
-  restarts the app.
+  to a local daemon is a button on the same screen, which clears the setting.
+- Settings now says which computer the client is talking to, with a button to change it.
+  Until this existed the connection screen only appeared to a client that already had a
+  server and had lost its password, so the environment variable was the only way to point
+  one at a server in the first place. Changing servers restarts the app, in both
+  directions, and says so before it happens.
+- `npm run build:web` in `frontend/` builds the browser client straight into the directory
+  the daemon embeds from, so producing the bundle and embedding it are one step. The build
+  refuses to finish if the entry point came out referencing its assets from the server
+  root, which would build cleanly and then serve a blank page.
+- The browser client now picks up the credential its login page obtained, instead of
+  loading successfully and then failing every call it made. The token is kept per tab, so
+  a second tab on the same daemon loads the app and then asks for the password again
+  rather than inheriting a session nobody signed into it with.
 - Planning artifacts for remote renderer support under
   `openspec/changes/add-remote-renderer/` — proposal, `remote-access` and `remote-client`
   specs, design, and task list.
@@ -77,3 +89,10 @@ at https://github.com/Untrivial-ai/agent-orchestrator/releases.
   host features, it is absent rather than misdirected: the panel attaches to a browser
   runtime whose address the app reads from this computer's run file, and there is no such
   file when no daemon runs here.
+- The content security policy is no longer a constant baked into the bundle. It named the
+  loopback range, which was the correct answer while every daemon was on this computer and
+  is the wrong one now: a client attached to a server elsewhere would have blocked its own
+  first request before it left the page. The browser build carries a policy naming its own
+  origin, and the desktop client's is written per launch by the main process and sent as a
+  response header, since a page carrying both a header and a tag gets whichever is
+  narrower.

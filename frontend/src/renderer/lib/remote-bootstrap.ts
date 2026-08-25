@@ -1,13 +1,16 @@
 /**
  * Where the client points itself before the first render.
  *
- * Three launches arrive here and each has a different answer. A browser tab is
- * served by the daemon it talks to, so the answer is its own origin. A desktop
- * launch that runs its own daemon has no answer yet — the supervisor reports a
- * port once it has one, and until then the client is aimed at nothing on
- * purpose. A desktop launch configured for a remote server knows the address
- * from its launch arguments and should be talking to it by the time the shell
- * mounts, without the operator being asked anything they have already answered.
+ * Four launches arrive here and each has a different answer. A desktop launch
+ * that runs its own daemon has no answer yet — the supervisor reports a port
+ * once it has one, and until then the client is aimed at nothing on purpose. A
+ * desktop launch configured for a remote server knows the address from its
+ * launch arguments and should be talking to it by the time the shell mounts,
+ * without the operator being asked anything they have already answered. A tab
+ * served by vite's dev server is aimed at its own origin, which the proxy
+ * forwards to a loopback daemon that wants no credential. A tab a daemon served
+ * itself is aimed at its own origin too, but has to present the credential its
+ * login page obtained, and goes back to that page when it has none.
  *
  * That last case is why this runs before render rather than inside a component.
  * A remote client that mounted first and re-aimed afterwards would show its
@@ -17,8 +20,10 @@
 
 import { aoBridge } from "./bridge";
 import { serverLabelFromAddress } from "../../shared/remote-server";
+import { REMOTE_LOGIN_PATH, readRemoteSession } from "../../shared/remote-session";
 import { aimAtRemoteServer, clearServerCredential, setRemoteServerTarget } from "./server-target";
 import { aimAtHostOrigin } from "./daemon-status";
+import { replaceLocation } from "./navigate";
 import { probeServer } from "./connect-server";
 import { setServerVersion } from "./server-connection";
 
@@ -42,10 +47,12 @@ import { setServerVersion } from "./server-connection";
 export function aimAtConfiguredServer(): Promise<void> {
 	const baseUrl = aoBridge.remoteServer;
 	if (baseUrl === null) {
-		// Either a browser tab, which belongs to the origin that served it, or a
-		// desktop launch whose own supervisor will report a port shortly. Both
-		// are settled without asking anyone anything.
-		aimAtHostOrigin();
+		// A tab the daemon itself served has a credential waiting for it and a
+		// login page to fall back to; every other browser tab and every ordinary
+		// desktop launch is settled without asking anyone anything — the origin
+		// that served it, or the port its own supervisor will report shortly.
+		if (isDaemonServedClient()) aimAtServingDaemon();
+		else aimAtHostOrigin();
 		return Promise.resolve();
 	}
 	const label = serverLabelFromAddress(baseUrl);
@@ -54,6 +61,62 @@ export function aimAtConfiguredServer(): Promise<void> {
 	// rather than an empty form appearing for no stated reason.
 	aimAtRemoteServer({ baseUrl, label });
 	return finishAiming(baseUrl, label);
+}
+
+/**
+ * Whether this bundle is the one a daemon serves at `/app/`, rather than the
+ * one vite's dev server serves while proxying to a daemon on loopback.
+ *
+ * Both are the renderer in a browser aimed at its own origin, and nothing they
+ * can observe at runtime separates them — same origin shape, same absent
+ * Electron preload. The difference is entirely in what is in front of the
+ * daemon: a network listener behind a connection password in one case, a dev
+ * proxy to loopback in the other. So the build says which one it produced.
+ */
+function isDaemonServedClient(): boolean {
+	return import.meta.env.VITE_AO_WEB_CLIENT === "1";
+}
+
+/**
+ * Aim a daemon-served tab at the daemon that served it, using the credential
+ * its login page left behind.
+ *
+ * The target is set as a remote one even though the daemon is at this tab's own
+ * origin, because "remote" here means "not a daemon this client started" — which
+ * is what decides that host-bound features stay withdrawn and that readiness is
+ * answered by the server rather than by a local supervisor that does not exist.
+ *
+ * With no credential to find, the tab goes back to the login page. That is the
+ * ordinary state of a second tab: the asset cookie is the browser's, so the app
+ * loads, but the token is the tab's and it has none.
+ */
+function aimAtServingDaemon(): void {
+	if (typeof window === "undefined") return;
+	const session = readRemoteSession(sessionStorageOrNull());
+	if (session === null) {
+		replaceLocation(REMOTE_LOGIN_PATH);
+		return;
+	}
+	const baseUrl = window.location.origin;
+	setRemoteServerTarget({ baseUrl, label: serverLabelFromAddress(baseUrl), credential: session.token });
+	// Already known from the exchange the login page made, so the client can
+	// report a version mismatch without a handshake of its own. Empty means the
+	// daemon was launched by no app and has no version to report, which
+	// `setServerVersion` records as unknown rather than as a mismatch.
+	setServerVersion(session.appVersion === "" ? null : session.appVersion);
+}
+
+/**
+ * The tab's session storage, or null where reaching for it raises — which the
+ * property access itself does under some browser privacy settings, before any
+ * read has been attempted.
+ */
+function sessionStorageOrNull(): Storage | null {
+	try {
+		return window.sessionStorage;
+	} catch {
+		return null;
+	}
 }
 
 async function finishAiming(baseUrl: string, label: string): Promise<void> {

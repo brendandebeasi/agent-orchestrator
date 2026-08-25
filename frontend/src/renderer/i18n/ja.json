@@ -120,6 +120,8 @@
 	"connectServer.remember": "このサーバーとパスワードを保存する",
 	"connectServer.connect": "接続",
 	"connectServer.connecting": "接続中…",
+	"connectServer.restarting": "再起動中…",
+	"connectServer.cancel": "キャンセル",
 	"connectServer.useLocal": "代わりにこのコンピューターを使う",
 	"connectServer.useLocalRestarting": "再起動中…",
 	"connectServer.useLocalHint": "このアプリを再起動し、このコンピューター上でサーバーを実行します。リモートのサーバーはそのまま動作し続けます。",
@@ -1338,5 +1340,9 @@
 	"settings.project.autoReview": "Auto review",
 	"settings.project.autoReviewToggle": "Auto review PRs",
 	"settings.project.autoReviewDescription": "When enabled, new worker sessions will automatically review their pull requests. This can still be toggled per session after spawn.",
-	"settings.project.reviewer": "Reviewer"
+	"settings.project.reviewer": "Reviewer",
+	"settings.server": "サーバー",
+	"settings.server.label": "接続先",
+	"settings.server.change": "変更…",
+	"settings.server.hint": "Agent Orchestrator を実行し、コードを保持しているコンピューター。変更するとこのアプリが再起動します。"
 }

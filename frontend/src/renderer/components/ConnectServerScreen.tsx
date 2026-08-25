@@ -13,11 +13,16 @@ import { Label } from "./ui/label";
 /**
  * Where the operator says which server to talk to.
  *
- * It fills the window rather than sitting in a dialog because there is nothing
- * behind it: until this succeeds the client has no daemon, so no board, no
- * sessions, and nothing to dismiss back to. It is deliberately the same shape
- * as the startup loader that it replaces, so a launch that needs a password
- * does not look like a different application.
+ * It fills the window rather than sitting in a dialog because in the case it
+ * was written for there is nothing behind it: until this succeeds the client
+ * has no daemon, so no board, no sessions, and nothing to dismiss back to. It
+ * is deliberately the same shape as the startup loader that it replaces, so a
+ * launch that needs a password does not look like a different application.
+ *
+ * Opened deliberately from settings there *is* something behind it, and that is
+ * what `onCancel` is for. It still takes the window: the form asks for a
+ * password, and a password field over a visible board is worth being unambiguous
+ * about.
  *
  * The form stays filled and editable through every failure. An operator who
  * mistyped one character of a tailnet hostname should fix that character, not
@@ -34,10 +39,17 @@ export function ConnectServerScreen({
 	initialProblem = null,
 	/** Called once a probe succeeds and the client has been re-aimed. */
 	onConnected,
+	/**
+	 * Go back to whatever was on screen. Absent when nothing was — a launch that
+	 * has no server yet has nowhere to be dismissed to, and a button that closed
+	 * onto an empty window would be worse than no button.
+	 */
+	onCancel,
 }: {
 	initialAddress?: string;
 	initialProblem?: ConnectionProbe | null;
 	onConnected?: (baseUrl: string) => void;
+	onCancel?: () => void;
 }) {
 	const { t } = useTranslation();
 	const [address, setAddress] = useState(initialAddress);
@@ -52,10 +64,12 @@ export function ConnectServerScreen({
 	// environment variable will decide the next launch anyway. Worth saying out
 	// loud, because the operator pressed a button and nothing visible happened.
 	const [envOverride, setEnvOverride] = useState(false);
-	// Set once the host has agreed to restart. It never clears: the window is on
-	// its way out, and a control that came back to life would invite a second
-	// press during the moment before it goes.
-	const [restarting, setRestarting] = useState(false);
+	// Which control the pending restart belongs to, or null when none is. It
+	// never clears: the window is on its way out, and a control that came back
+	// to life would invite a second press during the moment before it goes. It
+	// names the cause rather than just recording one because both buttons can
+	// provoke a restart, and only the one that was pressed should say so.
+	const [restarting, setRestarting] = useState<null | "connect" | "local">(null);
 	// Only a launch that was pointed at a server has somewhere to come back
 	// from. A browser tab reports null here too, which is right — it has no
 	// local daemon to offer.
@@ -104,7 +118,17 @@ export function ConnectServerScreen({
 			// morning — and so the client stops starting a local daemon it was
 			// never going to use. On a browser host this is a no-op: its server
 			// is whichever one served the page.
-			await aoBridge.remoteMode.set(baseUrl);
+			const change = await aoBridge.remoteMode.set(baseUrl);
+			// A client that was talking to somewhere else — this computer,
+			// usually — has to come back as a new process to talk to this one,
+			// because its page is loaded under a policy that names the old
+			// server and would block every request to the new one. The host is
+			// on its way out; saying so beats a window that stops responding for
+			// a moment and then vanishes.
+			if (change.relaunching) {
+				setRestarting("connect");
+				return;
+			}
 			onConnected?.(baseUrl);
 		} finally {
 			setBusy(false);
@@ -121,14 +145,14 @@ export function ConnectServerScreen({
 	 * is left alone; other people's sessions are running on it.
 	 */
 	async function useLocalDaemon() {
-		if (busy || restarting) return;
+		if (busy || restarting !== null) return;
 		setBusy(true);
 		setProblem(null);
 		setEnvOverride(false);
 		try {
 			const change = await aoBridge.remoteMode.set(null);
 			setEnvOverride(change.overriddenByEnv);
-			if (change.relaunching) setRestarting(true);
+			if (change.relaunching) setRestarting("local");
 		} finally {
 			setBusy(false);
 		}
@@ -209,23 +233,38 @@ export function ConnectServerScreen({
 						{problem ? <ProblemText text={t(problemMessageKey(problem))} /> : null}
 					</div>
 
-					<Button className="w-full" disabled={busy || restarting} type="submit">
-						{busy ? <Loader2 aria-hidden="true" className="animate-spin" /> : null}
-						{busy ? t("connectServer.connecting") : t("connectServer.connect")}
+					<Button className="w-full" disabled={busy || restarting !== null} type="submit">
+						{busy || restarting === "connect" ? <Loader2 aria-hidden="true" className="animate-spin" /> : null}
+						{restarting === "connect"
+							? t("connectServer.restarting")
+							: busy
+								? t("connectServer.connecting")
+								: t("connectServer.connect")}
 					</Button>
+					{onCancel ? (
+						<Button
+							className="w-full"
+							disabled={busy || restarting !== null}
+							onClick={onCancel}
+							type="button"
+							variant="ghost"
+						>
+							{t("connectServer.cancel")}
+						</Button>
+					) : null}
 				</form>
 
 				{launchedRemote ? (
 					<div className="mt-4 flex flex-col items-center gap-1.5">
 						<Button
 							className="w-full"
-							disabled={busy || restarting}
+							disabled={busy || restarting !== null}
 							onClick={() => void useLocalDaemon()}
 							type="button"
 							variant="ghost"
 						>
-							{restarting ? <Loader2 aria-hidden="true" className="animate-spin" /> : null}
-							{restarting ? t("connectServer.useLocalRestarting") : t("connectServer.useLocal")}
+							{restarting === "local" ? <Loader2 aria-hidden="true" className="animate-spin" /> : null}
+							{restarting === "local" ? t("connectServer.useLocalRestarting") : t("connectServer.useLocal")}
 						</Button>
 						<p className="px-1 text-center text-xs text-muted-foreground">
 							{t("connectServer.useLocalHint")}
