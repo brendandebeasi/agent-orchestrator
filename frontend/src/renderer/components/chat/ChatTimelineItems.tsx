@@ -2236,7 +2236,8 @@ export interface TurnOutcomeRetryControl {
  * How a turn ended when it did not complete cleanly. Successful turns skip this —
  * their duration already sits on the answer action row. `interrupted` is kept
  * distinct from failed because the provider reports it that way. `recovered`
- * closes replayed history without claiming the provider reported an outcome.
+ * closes history imported from Terminal UI without claiming an outcome that the
+ * provider did not report.
  */
 export function TurnOutcome({
 	state,
@@ -2249,7 +2250,10 @@ export function TurnOutcome({
 	retry?: TurnOutcomeRetryControl;
 }) {
 	const copy = {
-		recovered: { label: "Outcome unknown", tone: "text-muted-foreground/70" },
+		recovered: {
+			label: "Imported from Terminal UI — completion status unavailable",
+			tone: "text-muted-foreground/70",
+		},
 		interrupted: { label: "Stopped", tone: "text-muted-foreground/70" },
 		failed: { label: "Failed", tone: "text-destructive" },
 	}[state];
