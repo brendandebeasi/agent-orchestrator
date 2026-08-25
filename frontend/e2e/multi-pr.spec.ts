@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-// dev:web (VITE_NO_ELECTRON=1) serves lib/mock-data.ts. The api-gateway
+// dev:web:preview (VITE_AO_PREVIEW=1) serves lib/mock-data.ts. The api-gateway
 // workspace owns a "stacked-auth" session ("auth stack") carrying three PRs:
 // #41 open, #42 draft, #40 merged — the multi-PR-per-session case this suite
 // guards across the inspector rail.

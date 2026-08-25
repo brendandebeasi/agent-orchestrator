@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
-import { usesPreviewWorkspaceData } from "../lib/preview-mode";
+import { isPreviewMode } from "../lib/preview-mode";
 import type { AgentSwitchSummary } from "../types/workspace";
 
 export type AgentSwitch = AgentSwitchSummary;
@@ -89,7 +89,7 @@ export function useAgentSwitches(sessionId: string) {
 	return useQuery({
 		queryKey: agentSwitchesQueryKey(sessionId),
 		enabled: Boolean(sessionId),
-		queryFn: () => (usesPreviewWorkspaceData ? Promise.resolve([]) : fetchAgentSwitches(sessionId)),
+		queryFn: () => (isPreviewMode() ? Promise.resolve([]) : fetchAgentSwitches(sessionId)),
 		// Keep active sagas fresh even if the CDC connection is temporarily
 		// unavailable. Source-recovery endpoints accept work asynchronously, so
 		// those recovery rows must also poll until their worker settles.

@@ -3,8 +3,8 @@ import { installFakeAgent, installFakeBridge } from "./support/fake-bridge";
 
 // INS/DMN/BRD/SET RENDERER SMOKE (issue #2483, renderer slice).
 //
-// Scope — read this before trusting a green run. These run under `dev:web`
-// (VITE_NO_ELECTRON=1) with an injected `window.ao` (installFakeBridge /
+// Scope — read this before trusting a green run. These run under
+// `dev:web:preview` (VITE_AO_PREVIEW=1) with an injected `window.ao` (installFakeBridge /
 // installFakeAgent) plus a fake CDC/SSE stream and workspace snapshot. They
 // assert the renderer's rendering + interaction logic ONLY. They do NOT exercise
 // the real daemon, storage, API, preload, PTY, or filesystem — those boundaries

@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-// The Playwright web server runs `dev:web` (VITE_NO_ELECTRON=1), so
+// The Playwright web server runs `dev:web:preview` (VITE_AO_PREVIEW=1), so
 // useWorkspaceQuery serves the deterministic preview fixtures from
 // lib/mock-data.ts instead of hitting a daemon. The tests run in Chromium
 // (no window.ao), so the terminal shows its browser-preview surface.

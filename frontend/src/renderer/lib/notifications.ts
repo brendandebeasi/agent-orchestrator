@@ -2,6 +2,7 @@ import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { aoBridge } from "./bridge";
 import { apiClient, apiErrorMessage, getApiBaseUrl, subscribeApiBaseUrl } from "./api-client";
+import { isPreviewMode } from "./preview-mode";
 import { serverAuthHeaders } from "./server-target";
 import { openEventStream } from "./sse";
 
@@ -295,7 +296,11 @@ export function createNotificationsTransport(
 			let boundBaseUrl = currentBaseUrl();
 
 			const stream = openEventStream({
-				url: () => `${currentBaseUrl().replace(/\/+$/, "")}/api/v1/notifications/stream`,
+				// A preview build has no daemon behind it, so this would be a retry
+				// loop against nothing. Returning no URL parks the stream until the
+				// target changes, which in preview it never does.
+				url: () =>
+					isPreviewMode() ? null : `${currentBaseUrl().replace(/\/+$/, "")}/api/v1/notifications/stream`,
 				headers: serverAuthHeaders,
 				onOpen: invalidateNotifications,
 				onEvent: (event) => {

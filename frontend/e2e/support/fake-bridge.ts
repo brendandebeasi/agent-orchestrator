@@ -5,10 +5,11 @@ import type { AoBridge } from "../../src/preload";
 import type { DaemonStatus } from "../../src/shared/daemon-status";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../src/shared/ui-locale";
 
-// The e2e suite runs the renderer under `dev:web` (VITE_NO_ELECTRON=1) with no
-// Electron preload, so `window.ao` is undefined and lib/bridge.ts falls back to
-// a browser stub that reports the daemon as permanently "stopped" and the app
-// version as "0.0.0-preview". The daemon/version smoke cases (DMN-*, INS-004)
+// The e2e suite runs the renderer under `dev:web:preview` (VITE_AO_PREVIEW=1)
+// with no Electron preload, so `window.ao` is undefined and lib/bridge.ts falls
+// back to a browser stub that — in preview, where there is genuinely no daemon —
+// reports it as permanently "stopped" and the app version as "0.0.0-preview".
+// The daemon/version smoke cases (DMN-*, INS-004)
 // need a deterministic *ready* daemon and a known version string, so we inject
 // a complete `window.ao` before any page script runs — the same seam the real
 // Electron preload fills. This is a fake *bridge*, not a fake agent: no worker

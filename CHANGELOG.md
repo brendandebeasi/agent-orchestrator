@@ -24,6 +24,11 @@ at https://github.com/Untrivial-ai/agent-orchestrator/releases.
 
 ### Changed
 
+- The browser build now talks to a real daemon. Serving fixtures moved off
+  `VITE_NO_ELECTRON` onto a `VITE_AO_PREVIEW` flag of its own, so "there is no Electron
+  preload" and "there is no daemon" stop being the same question; `npm run dev:web` runs
+  the renderer against a running daemon and `npm run dev:web:preview` keeps the fixture
+  build the end-to-end suite is written against.
 - Server-sent event streams (change events, notifications, and the workspace file watch)
   are read with `fetch` instead of `EventSource`, which cannot present a credential.
   Reconnect and last-event resume, which `EventSource` provided, are now explicit: the

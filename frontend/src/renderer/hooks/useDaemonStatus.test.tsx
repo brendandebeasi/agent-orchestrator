@@ -23,6 +23,9 @@ const {
 
 vi.mock("../lib/bridge", () => ({
 	aoBridge: { daemon: { getStatus: getStatusMock, onStatus: onStatusMock } },
+	// These cases are all about the supervisor path: the hook exists to follow a
+	// daemon that Electron spawned and can move between ports.
+	hasElectronHost: true,
 }));
 
 vi.mock("../lib/event-transport", () => ({

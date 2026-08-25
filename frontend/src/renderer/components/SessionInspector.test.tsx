@@ -47,7 +47,7 @@ vi.mock("@tanstack/react-router", () => ({
 }));
 
 vi.mock("../lib/preview-mode", () => ({
-  usesPreviewWorkspaceData: false,
+  isPreviewMode: () => false,
 }));
 
 vi.mock("../lib/api-client", () => ({

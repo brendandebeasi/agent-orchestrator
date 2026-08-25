@@ -7,6 +7,8 @@ import { I18nextProvider } from "react-i18next";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
 import { queryClient } from "./lib/query-client";
+import { aimAtHostOrigin } from "./lib/daemon-status";
+import { isPreviewMode } from "./lib/preview-mode";
 import { mergeUnreadNotification, unreadNotificationsQueryKey } from "./lib/notifications";
 import { createAppRouter } from "./router";
 import { TelemetryBoundary } from "./components/TelemetryBoundary";
@@ -16,6 +18,11 @@ import { startUpdateTelemetry } from "./lib/update-telemetry";
 import { appI18n } from "./i18n";
 import { useLocaleStore } from "./stores/locale-store";
 import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
+
+// Before anything renders, so the first query already has somewhere to go. A
+// preview build is aimed at nothing on purpose: it answers from fixtures and a
+// request that escaped to a server would be a bug worth seeing fail.
+if (!isPreviewMode()) aimAtHostOrigin();
 
 const router = createAppRouter(queryClient);
 

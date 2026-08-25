@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { mockWorkspaces } from "../lib/mock-data";
-import { usesPreviewWorkspaceData } from "../lib/preview-mode";
+import { isPreviewMode } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
 import {
@@ -53,15 +53,15 @@ function reportUnknownSessionField(field: "status" | "activity", value?: string)
 	void captureRendererEvent("ao.renderer.session_state_unknown", { field, reason });
 }
 
-// e2e seam (dev:web only): the Playwright fake-agent harness injects
+// e2e seam (dev:web:preview only): the Playwright fake-agent harness injects
 // `window.__aoFakeAgent` (see e2e/support/fake-bridge.ts) to drive a
 // deterministic, mutable session timeline off the SSE refetch path. Compiled
-// out of the packaged build — the packaged renderer never sets VITE_NO_ELECTRON
+// out of the packaged build — the packaged renderer never sets VITE_AO_PREVIEW
 // and always hits the real daemon.
 type FakeAgentSeam = { snapshot: () => WorkspaceSummary[] };
 
 async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
-	if (usesPreviewWorkspaceData) {
+	if (isPreviewMode()) {
 		const fake =
 			typeof window !== "undefined"
 				? (window as unknown as { __aoFakeAgent?: FakeAgentSeam }).__aoFakeAgent

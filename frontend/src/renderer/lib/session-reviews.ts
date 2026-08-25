@@ -3,7 +3,7 @@ import type { components } from "../../api/schema";
 import { appI18n, type MessageKey } from "../i18n";
 import { sortedPRs, type WorkspaceSession } from "../types/workspace";
 import { apiClient, apiErrorMessage } from "./api-client";
-import { usesPreviewWorkspaceData as usePreviewData } from "./preview-mode";
+import { isPreviewMode } from "./preview-mode";
 
 export type PRReviewState = components["schemas"]["PRReviewState"];
 export type ReviewsResponse = components["schemas"]["ListReviewsResponse"];
@@ -26,7 +26,7 @@ export function sessionReviewsQueryOptions(session: WorkspaceSession, enabled: b
 			return reviews.some((review) => review.status === "running") ? 2500 : false;
 		},
 		queryFn: async () => {
-			if (usePreviewData) return mockReviewsResponse(session);
+			if (isPreviewMode()) return mockReviewsResponse(session);
 			const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/reviews", {
 				params: { path: { sessionId: session.id } },
 			});

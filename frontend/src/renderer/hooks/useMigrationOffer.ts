@@ -2,9 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { apiClient } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
 import type { MigrationState } from "../../main/app-state";
+import { isPreviewMode } from "../lib/preview-mode";
 
 export const migrationOfferQueryKey = ["migration-offer"] as const;
-const usePreviewData = import.meta.env.VITE_NO_ELECTRON === "1";
 
 export interface MigrationOffer {
 	show: boolean;
@@ -31,7 +31,7 @@ export function useMigrationOffer() {
 	return useQuery({
 		queryKey: migrationOfferQueryKey,
 		queryFn: fetchMigrationOffer,
-		enabled: !usePreviewData,
+		enabled: !isPreviewMode(),
 		retry: 1,
 		throwOnError: false,
 	});

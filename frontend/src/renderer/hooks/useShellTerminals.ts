@@ -7,6 +7,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { mockShellTerminals } from "../lib/mock-data";
+import { isPreviewMode } from "../lib/preview-mode";
 
 export type ShellTerminal = {
 	/** Runtime handle the terminal mux attaches to, exactly like a session pane's. */
@@ -20,7 +21,6 @@ export type ShellTerminal = {
 };
 
 export const shellTerminalsQueryKey = ["shell-terminals"] as const;
-const usePreviewData = import.meta.env.VITE_NO_ELECTRON === "1";
 
 function toShellTerminal(t: components["schemas"]["ShellTerminalResponse"]): ShellTerminal {
 	return {
@@ -41,7 +41,7 @@ let previewShellTerminals: ShellTerminal[] = [...mockShellTerminals];
 let previewShellSeq = 0;
 
 async function fetchShellTerminals(): Promise<ShellTerminal[]> {
-	if (usePreviewData) {
+	if (isPreviewMode()) {
 		return previewShellTerminals;
 	}
 	if (!hasTrustedApiBaseUrl()) {
@@ -76,7 +76,7 @@ export function useOpenShellTerminal() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: async ({ projectId, sessionId }: OpenShellTerminalInput = {}): Promise<ShellTerminal> => {
-			if (usePreviewData) {
+			if (isPreviewMode()) {
 				previewShellSeq += 1;
 				const shell: ShellTerminal = {
 					handleId: `shellterm-preview-${previewShellSeq}`,
@@ -113,7 +113,7 @@ export function useCloseShellTerminal() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: async (handleId: string): Promise<void> => {
-			if (usePreviewData) {
+			if (isPreviewMode()) {
 				previewShellTerminals = previewShellTerminals.filter((s) => s.handleId !== handleId);
 				return;
 			}
@@ -137,7 +137,7 @@ export function useRenameShellTerminal() {
 	const queryClient = useQueryClient();
 	return useMutation({
 		mutationFn: async ({ handleId, title }: RenameShellTerminalInput): Promise<ShellTerminal> => {
-			if (usePreviewData) {
+			if (isPreviewMode()) {
 				previewShellTerminals = previewShellTerminals.map((s) => (s.handleId === handleId ? { ...s, title } : s));
 				const shell = previewShellTerminals.find((s) => s.handleId === handleId);
 				if (!shell) throw new Error("No such shell terminal");

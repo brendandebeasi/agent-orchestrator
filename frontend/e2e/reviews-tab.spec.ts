@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-// dev:web (VITE_NO_ELECTRON=1) serves lib/mock-data.ts. Use stable session URLs
+// dev:web:preview (VITE_AO_PREVIEW=1) serves lib/mock-data.ts. Use stable session URLs
 // so fixture title changes do not prevent these tests from reaching Reviews.
 
 test("the Reviews tab renders the reviewer panel for a session that owns PRs", async ({ page }) => {

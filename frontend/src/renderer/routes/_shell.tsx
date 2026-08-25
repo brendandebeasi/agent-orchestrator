@@ -27,7 +27,7 @@ import { useWindowFullScreen } from "../hooks/useWindowFullScreen";
 import { useWorkspaceQuery, workspaceQueryKey, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { apiClient, apiErrorCode, apiErrorMessage, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { refreshDaemonStatus } from "../lib/daemon-status";
-import { usesPreviewWorkspaceData } from "../lib/preview-mode";
+import { isPreviewMode } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
@@ -56,7 +56,7 @@ export const Route = createFileRoute("/_shell")({
 	// nav target is warm before the click.
 	loader: async ({ context }) => {
 		await refreshDaemonStatus().catch(() => undefined);
-		if (!usesPreviewWorkspaceData && !hasTrustedApiBaseUrl()) return;
+		if (!isPreviewMode() && !hasTrustedApiBaseUrl()) return;
 		return context.queryClient.ensureQueryData(workspaceQueryOptions);
 	},
 	component: ShellLayout,
@@ -296,7 +296,7 @@ function ShellLayout() {
 	const setOrchestratorStartupError = useUiStore((state) => state.setOrchestratorStartupError);
 	const replacementErrorProjectId = Object.keys(orchestratorReplacementErrors)[0] ?? null;
 	const isStartupLoading =
-		!usesPreviewWorkspaceData &&
+		!isPreviewMode() &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading");
 	const navigateSession = useCallback(
@@ -552,7 +552,7 @@ function ShellLayout() {
 	// between projects and the first-run import flow.
 	useEffect(() => {
 		let active = true;
-		if (usesPreviewWorkspaceData) {
+		if (isPreviewMode()) {
 			workspaceStartupBaselineRef.current = 0;
 			setWorkspaceStartupState("ready");
 			return () => {
@@ -590,7 +590,7 @@ function ShellLayout() {
 	// shell without requiring a daemon restart or port change.
 	useEffect(() => {
 		if (
-			usesPreviewWorkspaceData ||
+			isPreviewMode() ||
 			daemonStatus.state !== "ready" ||
 			workspaceStartupState === "ready" ||
 			!workspaceQuery.isSuccess ||

@@ -71,7 +71,7 @@ import { Switch } from "./ui/switch";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
 import { appI18n } from "../i18n";
 import type { MessageKey } from "../i18n";
-import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
+import { isPreviewMode } from "../lib/preview-mode";
 import {
 	openReviewStatesFor,
 	reviewIsRunning,
@@ -535,7 +535,7 @@ function AutoInjectCIPolicyControl({ session }: { session: WorkspaceSession }) {
 	}, [session.id, session.autoInjectCI]);
 	const save = useMutation({
 		mutationFn: async (autoInjectCI: boolean) => {
-			if (usePreviewData) return;
+			if (isPreviewMode()) return;
 			const { error, response } = await apiClient.PATCH("/api/v1/sessions/{sessionId}/auto-inject-ci", {
 				params: { path: { sessionId: session.id } },
 				body: { autoInjectCI },
@@ -934,7 +934,7 @@ function ResumeAgentControl({ session }: { session: WorkspaceSession }) {
 	const queryClient = useQueryClient();
 	const resume = useMutation({
 		mutationFn: async () => {
-			if (usePreviewData) return;
+			if (isPreviewMode()) return;
 			const { data, error, response } = await apiClient.POST("/api/v1/sessions/{sessionId}/resume-agent", {
 				params: { path: { sessionId: session.id } },
 			});
@@ -990,7 +990,7 @@ function SessionControls({ session }: { session: WorkspaceSession }) {
 	const terminate = useTerminateSession();
 	const policy = useMutation({
 		mutationFn: async (terminateOnPrMerge: boolean) => {
-			if (usePreviewData) return;
+			if (isPreviewMode()) return;
 			const { error, response } = await apiClient.PATCH("/api/v1/sessions/{sessionId}/merge-policy", {
 				params: { path: { sessionId: session.id } },
 				body: { terminateOnPrMerge },
@@ -1114,7 +1114,7 @@ function PRSummaryCard({
 		Boolean(pr.url && pr.headSha);
 	const mergePr = useMutation({
 		mutationFn: async () => {
-			if (usePreviewData) return;
+			if (isPreviewMode()) return;
 			const { error } = await apiClient.POST("/api/v1/prs/{id}/merge", {
 				params: { path: { id: String(pr.number) } },
 				body: { prUrl: pr.url, expectedHeadSha: pr.headSha },
@@ -1403,7 +1403,7 @@ function ReviewsSection({
 		queryKey: ["project-config", session.workspaceId],
 		enabled: hasPr,
 		queryFn: async () => {
-			if (usePreviewData) return mockProjectConfig();
+			if (isPreviewMode()) return mockProjectConfig();
 			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", {
 				params: { path: { id: session.workspaceId } },
 			});

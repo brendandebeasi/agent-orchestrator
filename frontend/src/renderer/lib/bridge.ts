@@ -1,6 +1,17 @@
 import type { AoBridge } from "../../preload";
 import { coerceUiSettings, DEFAULT_UI_SETTINGS } from "../../shared/ui-locale";
+import { isPreviewMode } from "./preview-mode";
 export type { FeatureBuild } from "../../main/feature-builds";
+
+/**
+ * Whether an Electron preload is behind this window.
+ *
+ * The distinction the renderer actually cares about is not "browser or app" but
+ * "is there a supervisor" — something that spawned the daemon, knows its port,
+ * and can be asked to restart it. Everything the fallback below stubs out is
+ * downstream of that one fact.
+ */
+export const hasElectronHost = typeof window !== "undefined" && Boolean(window.ao);
 
 export const aoBridge: AoBridge =
 	window.ao ??
@@ -54,10 +65,19 @@ export const aoBridge: AoBridge =
 			readText: async () => (navigator.clipboard?.readText ? navigator.clipboard.readText() : ""),
 		},
 		daemon: {
-			getStatus: async () => ({
-				state: "stopped",
-				message: "Electron preload is not available in browser preview.",
-			}),
+			// A browser has no supervisor to ask, so there are only two honest
+			// answers. In preview there is no daemon at all and saying so is the
+			// accurate one. Otherwise the daemon is a server that was already
+			// running before this page loaded and will keep running after it
+			// closes: nothing here started it, nothing here can restart it, and
+			// its health is not something this stub can observe. It reports the
+			// only state that does not misrepresent that; whether the server is
+			// actually answering shows up where it is actually known, in the
+			// requests the client makes to it.
+			getStatus: async () =>
+				isPreviewMode()
+					? { state: "stopped", message: "Electron preload is not available in browser preview." }
+					: { state: "ready" },
 			start: async () => ({ state: "starting" }),
 			stop: async () => ({ state: "stopped" }),
 			restart: async () => ({ state: "starting" }),

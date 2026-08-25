@@ -2,13 +2,12 @@ import { useQuery } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { mockSessionScmSummaries } from "../lib/mock-data";
+import { isPreviewMode } from "../lib/preview-mode";
 
 export type SessionPRSummary = components["schemas"]["SessionPRSummary"];
 
 export const sessionScmSummaryQueryKey = (sessionId?: string) =>
 	sessionId ? (["session-scm-summary", sessionId] as const) : (["session-scm-summary"] as const);
-
-const usePreviewData = import.meta.env.VITE_NO_ELECTRON === "1";
 
 export async function fetchSessionScmSummary(sessionId: string): Promise<SessionPRSummary[]> {
 	const { data, error } = await apiClient.GET("/api/v1/sessions/{sessionId}/pr", {
@@ -23,7 +22,7 @@ export function sessionScmSummaryQueryOptions(sessionId: string) {
 		queryKey: sessionScmSummaryQueryKey(sessionId),
 		enabled: Boolean(sessionId),
 		queryFn: () =>
-			usePreviewData ? Promise.resolve(mockSessionScmSummaries[sessionId] ?? []) : fetchSessionScmSummary(sessionId),
+			isPreviewMode() ? Promise.resolve(mockSessionScmSummaries[sessionId] ?? []) : fetchSessionScmSummary(sessionId),
 		retry: 1,
 	};
 }
@@ -33,7 +32,7 @@ export function useSessionScmSummary(sessionId?: string) {
 		queryKey: sessionScmSummaryQueryKey(sessionId),
 		enabled: Boolean(sessionId),
 		queryFn: () =>
-			usePreviewData ? Promise.resolve(mockSessionScmSummaries[sessionId!] ?? []) : fetchSessionScmSummary(sessionId!),
+			isPreviewMode() ? Promise.resolve(mockSessionScmSummaries[sessionId!] ?? []) : fetchSessionScmSummary(sessionId!),
 		retry: 1,
 	});
 }
