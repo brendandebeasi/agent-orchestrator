@@ -207,6 +207,43 @@ Both opt-ins are load-bearing. Without the build tag there is nothing to serve;
 without `AO_REMOTE_SERVE_WEB` a tagged binary serves nothing, and `/` and
 everything under `/app/` answer as they would on any other build.
 
+## Reaching a daemon on a network you do not own
+
+The listener binds every interface by default, which is right for a phone on
+your own network and wrong for a daemon on a client's LAN: the dashboard would
+be offered to everything else on that network, behind one plaintext password.
+
+`AO_LAN_HOST` narrows it:
+
+```bash
+AO_LAN_HOST=127.0.0.1 AO_REMOTE_SERVE_WEB=on ao daemon
+```
+
+Now enabling the listener binds `127.0.0.1:3011` and nothing else. Confirm it
+on the box itself:
+
+```bash
+ss -ltn | grep 3011          # 127.0.0.1:3011, not 0.0.0.0:3011
+```
+
+Reach it with an SSH tunnel from your workstation:
+
+```bash
+ssh -N -L 127.0.0.1:3201:127.0.0.1:3011 the-box
+```
+
+Then open `http://127.0.0.1:3201/` and log in with that box's connection
+password. SSH does the authentication, the daemon offers itself to nothing, and
+you get the full dashboard. Run one tunnel per box on a different local port to
+have several open at once.
+
+The value must be an IP address, not a hostname, and a bad one stops the daemon
+from starting rather than falling back to every interface. A setting whose job
+is to restrict reachability must not widen it on a typo.
+
+This only narrows the listener. The connection password, the per-source
+lockout, and the routes the listener refuses to serve are all unchanged.
+
 ## TLS with `tailscale serve`
 
 The listener has no TLS of its own. The supported way to get a real certificate

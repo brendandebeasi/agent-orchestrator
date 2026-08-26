@@ -82,6 +82,16 @@ at https://github.com/Untrivial-ai/agent-orchestrator/releases.
   profile.
 - Planning artifacts for launch profiles under `openspec/changes/add-launch-profiles/` —
   proposal, `remote-client` spec deltas, design, and task list.
+- `AO_LAN_HOST` names the interface the network listener binds, defaulting to every one
+  as before. The web dashboard is served by that listener and not by the loopback one, so
+  reaching it used to mean offering the daemon to the whole network it sits on. Setting
+  it to `127.0.0.1` makes the dashboard reachable through an SSH tunnel and from nowhere
+  else, which is what a daemon on a network you do not own needs. The value must be an IP
+  address and a bad one stops the daemon rather than falling back, since a setting that
+  exists to restrict reachability must not widen it on a typo. It can only narrow the
+  listener: the password, the lockout, and the blocked routes are untouched.
+- Planning artifacts for the bind host under `openspec/changes/add-lan-bind-host/` —
+  proposal, `remote-access` spec delta, design, and task list.
 
 A launch that names no profile is unchanged in every respect. It keeps the same
 `userData` directory, reads the same `remote-mode.json`, and shows the same window
