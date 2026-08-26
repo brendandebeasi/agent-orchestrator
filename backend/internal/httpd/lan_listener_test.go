@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -241,4 +243,71 @@ func TestLANManagerStartStopIdempotent(t *testing.T) {
 		t.Fatal("still running after stop")
 	}
 	_ = m.Stop(ctx) // second stop is a no-op
+}
+
+// A listener told to bind loopback must not answer on any other address the
+// machine has. This is the whole point of AO_LAN_HOST: on a network the
+// operator does not own, "reachable through a tunnel" and "offered to every
+// machine on this LAN" have to be separable.
+func TestLANListenerBindsOnlyTheConfiguredInterface(t *testing.T) {
+	routable := firstRoutableIPv4(t)
+
+	mgr := NewLANManagerOn("127.0.0.1", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), &authState{}, 0, nil, nil, remoteWebOptions{})
+	port, err := mgr.Start(0)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop(context.Background()) })
+
+	if _, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)), 2*time.Second); err != nil {
+		t.Fatalf("loopback dial failed, the listener should be there: %v", err)
+	}
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(routable, strconv.Itoa(port)), 2*time.Second)
+	if err == nil {
+		_ = conn.Close()
+		t.Fatalf("listener answered on %s; AO_LAN_HOST=127.0.0.1 must keep it off every other interface", routable)
+	}
+}
+
+// The default is unchanged: every interface, which is what the phone needs.
+func TestLANListenerDefaultsToEveryInterface(t *testing.T) {
+	routable := firstRoutableIPv4(t)
+
+	mgr := NewLANManager(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), &authState{}, 0, nil, nil, remoteWebOptions{})
+	port, err := mgr.Start(0)
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	t.Cleanup(func() { _ = mgr.Stop(context.Background()) })
+
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(routable, strconv.Itoa(port)), 2*time.Second)
+	if err != nil {
+		t.Fatalf("default listener should answer on %s: %v", routable, err)
+	}
+	_ = conn.Close()
+}
+
+// A non-loopback IPv4 this machine actually holds, so the two tests above are
+// asserting against a real second interface rather than a hypothetical one.
+func firstRoutableIPv4(t *testing.T) string {
+	t.Helper()
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		t.Fatalf("InterfaceAddrs: %v", err)
+	}
+	for _, a := range addrs {
+		ipnet, ok := a.(*net.IPNet)
+		if !ok || ipnet.IP.IsLoopback() {
+			continue
+		}
+		if v4 := ipnet.IP.To4(); v4 != nil {
+			return v4.String()
+		}
+	}
+	t.Skip("no non-loopback IPv4 interface on this machine")
+	return ""
 }

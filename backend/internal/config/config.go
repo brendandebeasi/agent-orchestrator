@@ -23,6 +23,11 @@ const (
 	// non-default loopback (e.g. ::1, 127.0.0.2) is ever needed, add it back with
 	// an IsLoopback() validator — not a raw env read.
 	LoopbackHost = "127.0.0.1"
+	// DefaultLANHost is the interface the opt-in network listener binds unless
+	// AO_LAN_HOST narrows it. Unlike the primary listener above, this one is
+	// authenticated, so binding every interface is a supported configuration
+	// rather than a footgun.
+	DefaultLANHost = "0.0.0.0"
 	// DefaultPort is the single port for REST, terminal mux, health, and control.
 	DefaultPort = 3001
 	// DefaultRequestTimeout bounds a single REST request. Long-lived terminal mux
@@ -158,6 +163,23 @@ type RemoteAccessConfig struct {
 	// larger surface than serving the API and neither the build nor the
 	// operator should be able to turn it on alone.
 	ServeWebClient bool
+
+	// ListenHost is the interface the network listener binds. It defaults to
+	// 0.0.0.0, which is what the phone on the couch needs and what this listener
+	// has always done.
+	//
+	// It is settable because "reachable from another machine" and "reachable
+	// from every machine on this network" are different asks, and only the
+	// second one is what 0.0.0.0 grants. A daemon on a network the operator does
+	// not own can bind 127.0.0.1 and be reached through an SSH tunnel instead:
+	// same access, authenticated by the tunnel, with nothing new listening where
+	// strangers can find it. That is the difference between choosing to expose a
+	// service and exposing it because the bind address was not a choice.
+	//
+	// This does not weaken anything: it can only narrow what the listener
+	// accepts. The password, the per-source lockout, and the route block list
+	// all still apply.
+	ListenHost string
 }
 
 // Addr returns the host:port the HTTP server binds. It uses net.JoinHostPort so
@@ -189,8 +211,12 @@ func (c Config) Addr() string {
 //	AO_GITLAB_ALLOWED_HOSTS    comma-separated self-managed GitLab hosts (each may include :port)
 //	AO_GITLAB_HOST_TOKENS      host=token,host=token per-host token overrides
 //	AO_REMOTE_SERVE_WEB        host the web client on the network listener off|on (default off)
+//	AO_LAN_HOST                interface the network listener binds (default 0.0.0.0)
 //
-// The bind host is not configurable: the daemon is loopback-only by design.
+// The primary listener's bind host is not configurable: it is loopback-only by
+// design. The opt-in network listener's is, through AO_LAN_HOST, because that
+// one is authenticated and narrowing it is how a daemon on someone else's
+// network stays off that network.
 func Load() (Config, error) {
 	cfg := Config{
 		Host:            LoopbackHost,
@@ -203,6 +229,7 @@ func Load() (Config, error) {
 			Remote:      TelemetryRemoteOff,
 			PostHogHost: DefaultTelemetryPostHogHost,
 		},
+		RemoteAccess: RemoteAccessConfig{ListenHost: DefaultLANHost},
 	}
 
 	if raw := os.Getenv("AO_PORT"); raw != "" {
@@ -327,6 +354,16 @@ func Load() (Config, error) {
 			return Config{}, err
 		}
 		cfg.RemoteAccess.ServeWebClient = v
+	}
+
+	if raw := strings.TrimSpace(os.Getenv("AO_LAN_HOST")); raw != "" {
+		// An IP, not a hostname: this is an interface to bind, and a name that
+		// resolves to several addresses would make "which interface" ambiguous
+		// at the moment the operator most wants it pinned down.
+		if net.ParseIP(raw) == nil {
+			return Config{}, fmt.Errorf("invalid AO_LAN_HOST %q: want an IP address to bind", raw)
+		}
+		cfg.RemoteAccess.ListenHost = raw
 	}
 
 	runFile, err := resolveRunFilePath()

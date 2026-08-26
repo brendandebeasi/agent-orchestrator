@@ -416,3 +416,40 @@ func TestLoadRemoteServeWebClient(t *testing.T) {
 		}
 	})
 }
+
+func TestLANHostDefaultsToEveryInterface(t *testing.T) {
+	t.Setenv("AO_LAN_HOST", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.RemoteAccess.ListenHost != DefaultLANHost {
+		t.Fatalf("ListenHost = %q, want %q", cfg.RemoteAccess.ListenHost, DefaultLANHost)
+	}
+}
+
+func TestLANHostNarrowsTheListener(t *testing.T) {
+	// The point of the setting: a daemon on a network the operator does not own
+	// can be reached through a tunnel without offering itself to that network.
+	t.Setenv("AO_LAN_HOST", "127.0.0.1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.RemoteAccess.ListenHost != "127.0.0.1" {
+		t.Fatalf("ListenHost = %q, want 127.0.0.1", cfg.RemoteAccess.ListenHost)
+	}
+}
+
+func TestLANHostRejectsAnythingThatIsNotAnAddress(t *testing.T) {
+	// A hostname can resolve to several addresses, which would make "which
+	// interface" ambiguous exactly where the operator wants it pinned.
+	for _, raw := range []string{"localhost", "example.com", "not an ip", "127.0.0.1:3011"} {
+		t.Run(raw, func(t *testing.T) {
+			t.Setenv("AO_LAN_HOST", raw)
+			if _, err := Load(); err == nil {
+				t.Fatalf("Load() accepted AO_LAN_HOST=%q, want an error", raw)
+			}
+		})
+	}
+}

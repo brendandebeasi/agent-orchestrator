@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +22,7 @@ import (
 type LANManager struct {
 	handler     http.Handler // shared router, already auth-wrapped
 	defaultPort int
+	listenHost  string // interface to bind; see config.RemoteAccessConfig.ListenHost
 	log         *slog.Logger
 	state       *authState // shared with authMiddleware; SetPasswordHash writes through here
 
@@ -42,11 +44,22 @@ type LANManager struct {
 //	authMiddleware       → every remaining route needs the connection password
 //	remoteWebAssets      → the web client bundle, authenticated like any route
 func NewLANManager(handler http.Handler, state *authState, defaultPort int, log *slog.Logger, sink ports.EventSink, web remoteWebOptions) *LANManager {
+	return NewLANManagerOn(config.DefaultLANHost, handler, state, defaultPort, log, sink, web)
+}
+
+// NewLANManagerOn is NewLANManager with the bind interface named. An empty host
+// means the default, so a caller that has not thought about it gets the
+// behaviour this listener has always had.
+func NewLANManagerOn(listenHost string, handler http.Handler, state *authState, defaultPort int, log *slog.Logger, sink ports.EventSink, web remoteWebOptions) *LANManager {
 	lock := newLockout(5, time.Minute, time.Now)
 	authed := authMiddleware(state, lock, newMobileConnectReporter(sink, time.Now))(remoteWebAssets(web)(handler))
+	if listenHost == "" {
+		listenHost = config.DefaultLANHost
+	}
 	return &LANManager{
 		handler:     markNetworkListener(lanControlBlock(remoteWebEntry(state, lock, web)(authed))),
 		defaultPort: defaultPort,
+		listenHost:  listenHost,
 		log:         loggerOrDefault(log),
 		state:       state,
 	}
@@ -217,7 +230,7 @@ func NewMobileLAN(handler http.Handler, defaultPort int, log *slog.Logger, sink 
 	if assets, ok := webClientFS(); ok {
 		web.Assets = assets
 	}
-	return NewLANManager(handler, &authState{}, defaultPort, log, sink, web)
+	return NewLANManagerOn(cfg.RemoteAccess.ListenHost, handler, &authState{}, defaultPort, log, sink, web)
 }
 
 // SetPasswordHash stores the current connection password hash on the shared
@@ -246,16 +259,21 @@ func (m *LANManager) Start(port int) (int, error) {
 	if port == 0 {
 		port = m.defaultPort
 	}
-	ln, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%d", port))
+	host := m.listenHost
+	if host == "" {
+		host = config.DefaultLANHost
+	}
+	//nolint:gosec // G102: binding every interface is the deliberate default for the Connect Mobile LAN listener; it runs only while the bridge is enabled and behind authMiddleware, and AO_LAN_HOST narrows it.
+	ln, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
 	if err != nil {
 		if !isAddrInUse(err) {
 			m.mu.Unlock()
-			return 0, fmt.Errorf("bind LAN 0.0.0.0:%d: %w", port, err)
+			return 0, fmt.Errorf("bind LAN %s: %w", net.JoinHostPort(host, strconv.Itoa(port)), err)
 		}
-		//nolint:gosec // G102: binding all interfaces is the deliberate purpose of the Connect Mobile LAN listener; it runs only while the bridge is enabled and behind authMiddleware.
-		if ln, err = net.Listen("tcp", "0.0.0.0:0"); err != nil {
+		//nolint:gosec // G102: same interface as the configured bind above, ephemeral port.
+		if ln, err = net.Listen("tcp", net.JoinHostPort(host, "0")); err != nil {
 			m.mu.Unlock()
-			return 0, fmt.Errorf("bind LAN ephemeral: %w", err)
+			return 0, fmt.Errorf("bind LAN ephemeral on %s: %w", host, err)
 		}
 		m.log.Warn("LAN port in use; bound ephemeral", "wanted", port, "bound", ln.Addr())
 	}
